@@ -1,0 +1,22 @@
+# Neovim swap / backup / undo files
+*.swp
+*.swo
+*~
+.*.swp
+
+# Luarocks build artifacts
+*.rock
+luarocks/
+
+# Local test output
+tests/.luacov*
+luacov.stats.out
+luacov.report.out
+
+# Editor project files
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store

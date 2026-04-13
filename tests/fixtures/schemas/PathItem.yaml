@@ -1,0 +1,21 @@
+get:
+  summary: Get user by ID (via $ref path item)
+  parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+  responses:
+    '200':
+      description: OK
+patch:
+  summary: Update user
+  responses:
+    '200':
+      description: Updated
+delete:
+  summary: Delete user
+  responses:
+    '204':
+      description: Deleted

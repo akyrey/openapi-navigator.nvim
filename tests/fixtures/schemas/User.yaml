@@ -1,0 +1,22 @@
+type: object
+description: A full user object
+required:
+  - id
+  - name
+  - email
+properties:
+  id:
+    $ref: '../openapi30.yaml#/components/schemas/UserId'
+  name:
+    type: string
+    example: Jane Doe
+  email:
+    type: string
+    format: email
+    example: jane@example.com
+  address:
+    $ref: './Address.yaml#/components/schemas/Address'
+  tags:
+    type: array
+    items:
+      type: string

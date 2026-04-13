@@ -1,0 +1,96 @@
+openapi: "3.1.0"
+info:
+  title: Test API (3.1)
+  version: "1.0.0"
+  summary: A test API using OpenAPI 3.1.0 features
+webhooks:
+  newUser:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserEvent'
+      responses:
+        '200':
+          description: OK
+paths:
+  /users:
+    get:
+      summary: List users
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserList'
+  /users/{id}:
+    $ref: './schemas/PathItem.yaml'
+  /items/{id}:
+    get:
+      summary: Get item
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+components:
+  schemas:
+    UserList:
+      type: array
+      items:
+        $ref: '#/components/schemas/UserSummary'
+    UserSummary:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          $ref: '#/components/schemas/UserId'
+        name:
+          type: string
+        nickname:
+          type:
+            - string
+            - "null"
+    UserId:
+      type: integer
+      format: int64
+    UserEvent:
+      type: object
+      properties:
+        event:
+          type: string
+          const: user.created
+        user:
+          $ref: '#/components/schemas/UserSummary'
+    Item:
+      type: object
+      properties:
+        id:
+          type: integer
+        tags:
+          type: array
+          prefixItems:
+            - type: string
+            - type: integer
+          items: false
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+    Metadata:
+      type:
+        - object
+        - "null"
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type:
+            - string
+            - "null"
+          format: date-time

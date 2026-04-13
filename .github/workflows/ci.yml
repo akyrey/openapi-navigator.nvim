@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    name: Lint (stylua + luacheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stylua
+        uses: JohnnyMorganz/stylua-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          version: latest
+          args: --check lua/
+
+      - name: Install luacheck
+        run: pip install hererocks && hererocks lua_install -r^ --lua=5.1 && lua_install/bin/luarocks install luacheck
+
+      - name: Run luacheck
+        run: lua_install/bin/luacheck lua/ --globals vim --no-max-line-length
+
+  test:
+    name: Tests (Neovim ${{ matrix.nvim }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        nvim:
+          - v0.9.5
+          - v0.10.3
+          - nightly
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Neovim ${{ matrix.nvim }}
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.nvim }}
+
+      - name: Install plenary.nvim
+        run: |
+          mkdir -p ~/.local/share/nvim/lazy
+          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim \
+              ~/.local/share/nvim/lazy/plenary.nvim
+
+      - name: Run tests
+        run: |
+          nvim --headless --noplugin \
+               -u tests/minimal_init.lua \
+               -c "set rtp+=~/.local/share/nvim/lazy/plenary.nvim" \
+               -c "PlenaryBustedDirectory tests/unit/ {minimal_init='tests/minimal_init.lua'}" \
+               -c "qa!"

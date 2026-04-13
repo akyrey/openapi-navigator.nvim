@@ -1,0 +1,18 @@
+components:
+  schemas:
+    Address:
+      type: object
+      description: A postal address
+      required:
+        - street
+        - city
+      properties:
+        street:
+          type: string
+        city:
+          type: string
+        postcode:
+          type: string
+        country:
+          type: string
+          default: GB
