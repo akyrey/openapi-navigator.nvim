@@ -37,9 +37,11 @@ M._references = {}
 --- @type table<string, integer>
 M._indexed_files = {}
 
---- Resolved spec root directory
---- @type string|nil
-M._root = nil
+--- Per-directory cache of resolved spec roots.
+--- Keyed by the directory of the buffer file so that opening files from
+--- different projects in the same session each get their own root.
+--- @type table<string, string>
+M._roots = {}
 
 -- ============================================================
 -- Helpers
@@ -75,14 +77,16 @@ end
 -- Root discovery
 -- ============================================================
 
---- Find the spec root for a given buffer and cache it on M._root.
+--- Find the spec root for a given buffer, cached per source directory.
 --- @param bufnr integer
 --- @return string|nil
 local function get_root(bufnr)
-  if M._root then return M._root end
+  local filepath = vim.fn.resolve(vim.api.nvim_buf_get_name(bufnr))
+  local dir = vim.fn.fnamemodify(filepath, ":h")
+  if M._roots[dir] ~= nil then return M._roots[dir] end
   local init = require("openapi-navigator.init")
-  M._root = init.get_spec_root(bufnr)
-  return M._root
+  M._roots[dir] = init.get_spec_root(bufnr)
+  return M._roots[dir]
 end
 
 -- ============================================================

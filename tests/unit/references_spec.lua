@@ -30,7 +30,7 @@ local function reset_index()
   index._definitions   = {}
   index._references    = {}
   index._indexed_files = {}
-  index._root          = nil
+  index._roots         = {}
 end
 
 -- ── canonical key building from a $ref line ───────────────────────────────────

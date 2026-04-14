@@ -10,18 +10,19 @@ local _detection_cache = {}
 -- ---------------------------------------------------------------------------
 
 --- Check whether a filename matches any of the configured glob patterns.
+--- Uses vim.fn.glob2regpat to convert each glob to a Vim regex, then
+--- vim.fn.match to test. Checks both the full path and the basename.
 --- @param filename string  basename or full path
 --- @param patterns string[]
 --- @return boolean
 local function matches_pattern(filename, patterns)
+  local base = vim.fn.fnamemodify(filename, ":t")
   for _, pat in ipairs(patterns) do
-    -- vim.fn.fnmatch supports glob patterns including ** via the FNM_PATHNAME flag (2)
-    if vim.fn.fnmatch(filename, pat, 2) == 1 then
+    local re = vim.fn.glob2regpat(pat)
+    if vim.fn.match(filename, re) >= 0 then
       return true
     end
-    -- Also match against basename alone
-    local base = vim.fn.fnamemodify(filename, ":t")
-    if vim.fn.fnmatch(base, pat, 0) == 1 then
+    if vim.fn.match(base, re) >= 0 then
       return true
     end
   end
@@ -133,14 +134,16 @@ M.is_openapi_buffer = is_openapi_buffer
 M.find_root = find_root
 
 --- Find the spec root directory for the given buffer.
---- Returns the root directory string or nil.
+--- Walks parent directories looking for a root_marker file.
+--- Falls back to the buffer file's own directory so that specs that aren't
+--- named openapi.yaml (e.g. petstore.yaml, api-docs.yaml) still get indexed.
 --- @param bufnr integer
 --- @return string|nil
 function M.get_spec_root(bufnr)
   local filepath = vim.api.nvim_buf_get_name(bufnr or 0)
   if filepath == "" then return nil end
-  local dir = vim.fn.fnamemodify(filepath, ":h")
-  return find_root(dir, config.options.root_markers)
+  local dir = vim.fn.fnamemodify(vim.fn.resolve(filepath), ":h")
+  return find_root(dir, config.options.root_markers) or dir
 end
 
 -- ---------------------------------------------------------------------------
@@ -229,6 +232,64 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("OpenAPIReferences", function()
     require("openapi-navigator.references").find()
   end, { desc = "Find all $ref usages of the definition under cursor" })
+
+  vim.api.nvim_create_user_command("OpenAPIDebug", function()
+    local idx   = require("openapi-navigator.index")
+    local res   = require("openapi-navigator.resolver")
+    local bufnr = vim.api.nvim_get_current_buf()
+    local file  = vim.api.nvim_buf_get_name(bufnr)
+    local lines = {}
+
+    local function add(label, value)
+      table.insert(lines, string.format("  %-22s %s", label .. ":", tostring(value)))
+    end
+
+    table.insert(lines, "openapi-navigator debug")
+    table.insert(lines, string.rep("─", 50))
+    add("buffer", vim.fn.fnamemodify(file, ":~:."))
+    add("detected as OpenAPI", tostring(is_openapi_buffer(bufnr)))
+    add("spec root", tostring(M.get_spec_root(bufnr)))
+
+    local n_def, n_ref, n_files = 0, 0, 0
+    for _ in pairs(idx._definitions)   do n_def   = n_def   + 1 end
+    for _ in pairs(idx._references)    do n_ref   = n_ref   + 1 end
+    for _ in pairs(idx._indexed_files) do n_files  = n_files + 1 end
+    add("indexed files", n_files)
+    add("definitions", n_def)
+    add("reference keys", n_ref)
+
+    local ref = res.parse_ref_at_cursor()
+    if ref then
+      add("$ref on cursor", ref.raw)
+      local target = res.resolve_file(ref, bufnr)
+      add("resolves to file", tostring(target and vim.fn.fnamemodify(target, ":~:.") or "NOT FOUND"))
+      if target then
+        local pos = res.resolve_pointer(target, ref.pointer)
+        add("pointer line", tostring(pos and pos.line or "NOT FOUND"))
+      end
+      if target then
+        local ckey = idx.canonical_key(
+          vim.fn.resolve(target),
+          ref.pointer
+        )
+        local refs = idx.get_references(ckey)
+        add("canonical key", ckey)
+        add("references found", #refs)
+      end
+    else
+      local pointer = idx.get_pointer_at_cursor(bufnr)
+      add("$ref on cursor", "none")
+      add("pointer at cursor", tostring(pointer))
+      if pointer then
+        local ckey = idx.canonical_key(vim.fn.resolve(file), pointer)
+        local refs = idx.get_references(ckey)
+        add("canonical key", ckey)
+        add("references found", #refs)
+      end
+    end
+
+    vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "OpenAPI Navigator" })
+  end, { desc = "Show openapi-navigator diagnostics for the current buffer" })
 end
 
 return M

@@ -54,7 +54,7 @@ describe("ensure_indexed — OpenAPI 3.0 YAML", function()
     index._definitions = {}
     index._references  = {}
     index._indexed_files = {}
-    index._root = nil
+    index._roots = {}
     index.ensure_indexed(0)
   end)
 
@@ -124,7 +124,7 @@ describe("ensure_indexed — references", function()
     index._definitions = {}
     index._references  = {}
     index._indexed_files = {}
-    index._root = nil
+    index._roots = {}
     index.ensure_indexed(0)
   end)
 
@@ -187,7 +187,7 @@ describe("ensure_indexed — OpenAPI 3.1 YAML", function()
     index._definitions = {}
     index._references  = {}
     index._indexed_files = {}
-    index._root = nil
+    index._roots = {}
     index.ensure_indexed(0)
   end)
 
@@ -236,7 +236,7 @@ describe("ensure_indexed — JSON format", function()
     index._definitions = {}
     index._references  = {}
     index._indexed_files = {}
-    index._root = nil
+    index._roots = {}
     index.ensure_indexed(0)
   end)
 
@@ -273,7 +273,7 @@ describe("mtime caching", function()
     index._definitions = {}
     index._references  = {}
     index._indexed_files = {}
-    index._root = nil
+    index._roots = {}
   end)
 
   after_each(function()
@@ -310,7 +310,7 @@ describe("invalidate", function()
     index._definitions = {}
     index._references  = {}
     index._indexed_files = {}
-    index._root = nil
+    index._roots = {}
     index.ensure_indexed(0)
 
     bufnr = vim.api.nvim_create_buf(false, true)
