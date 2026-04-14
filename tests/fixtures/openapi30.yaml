@@ -7,12 +7,12 @@ paths:
     get:
       summary: List users
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserList'
+                $ref: "#/components/schemas/UserList"
   /users/{id}:
     get:
       summary: Get user by ID
@@ -21,36 +21,36 @@ paths:
           in: path
           required: true
           schema:
-            $ref: '#/components/schemas/UserId'
+            $ref: "#/components/schemas/UserId"
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: './schemas/User.yaml'
-        '404':
+                $ref: "./schemas/User.yaml"
+        "404":
           description: Not found
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: "#/components/schemas/Error"
   /users/{id}/address:
     get:
       summary: Get user address
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: './schemas/User.yaml#/properties/address'
+                $ref: "./schemas/User.yaml#/properties/address"
 components:
   schemas:
     UserList:
       type: array
       items:
-        $ref: '#/components/schemas/UserSummary'
+        $ref: "#/components/schemas/UserSummary"
     UserSummary:
       type: object
       required:
@@ -58,7 +58,7 @@ components:
         - name
       properties:
         id:
-          $ref: '#/components/schemas/UserId'
+          $ref: "#/components/schemas/UserId"
         name:
           type: string
     UserId:
@@ -81,4 +81,4 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: "#/components/schemas/Error"

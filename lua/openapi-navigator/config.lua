@@ -1,39 +1,39 @@
 local M = {}
 
 M.defaults = {
-  -- File patterns to treat as OpenAPI specs
-  patterns = {
-    "openapi*.yaml",
-    "openapi*.yml",
-    "openapi*.json",
-    "swagger*.yaml",
-    "swagger*.json",
-    "**/api-docs/**/*.yaml",
-    "**/api-docs/**/*.yml",
-  },
+	-- File patterns to treat as OpenAPI specs
+	patterns = {
+		"openapi*.yaml",
+		"openapi*.yml",
+		"openapi*.json",
+		"swagger*.yaml",
+		"swagger*.json",
+		"**/api-docs/**/*.yaml",
+		"**/api-docs/**/*.yml",
+	},
 
-  -- Root markers used to find the spec root directory
-  root_markers = {
-    "openapi.yaml",
-    "openapi.yml",
-    "openapi.json",
-    "swagger.yaml",
-    "swagger.json",
-  },
+	-- Root markers used to find the spec root directory
+	root_markers = {
+		"openapi.yaml",
+		"openapi.yml",
+		"openapi.json",
+		"swagger.yaml",
+		"swagger.json",
+	},
 
-  -- Keymaps (set to false to disable)
-  keymaps = {
-    goto_definition = "gd",
-    hover = "K",
-    find_references = "gr",
-  },
+	-- Keymaps (set to false to disable)
+	keymaps = {
+		goto_definition = "gd",
+		hover = "K",
+		find_references = "gr",
+	},
 
-  -- Hover preview options
-  hover = {
-    max_width = 80,
-    max_height = 30,
-    max_depth = 2,
-  },
+	-- Hover preview options
+	hover = {
+		max_width = 80,
+		max_height = 30,
+		max_depth = 2,
+	},
 }
 
 -- Active resolved options (populated after setup())
@@ -43,8 +43,8 @@ M.options = {}
 --- @param user_opts table|nil
 --- @return table
 function M.build(user_opts)
-  M.options = vim.tbl_deep_extend("force", {}, M.defaults, user_opts or {})
-  return M.options
+	M.options = vim.tbl_deep_extend("force", {}, M.defaults, user_opts or {})
+	return M.options
 end
 
 return M
