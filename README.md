@@ -5,14 +5,15 @@ A pure-Lua Neovim plugin for navigating OpenAPI/Swagger specification files.
 Designed to complement **yaml-language-server** (which handles validation and
 completion) with navigation capabilities that LSP alone doesn't provide:
 jump to `$ref` definitions, hover schema previews, and find-all-references.
+Supports both OpenAPI 3.0 and 3.1 specs, in YAML and JSON, across single-file
+and multi-file layouts using relative `$ref` paths.
 
-No external binary dependencies. Works with single-file specs and multi-file
-specs split across directories using relative `$ref` paths.
+No external binary dependencies. No Treesitter parsers required.
 
 ## Requirements
 
 - Neovim >= 0.9
-- yaml-language-server (optional, but recommended for validation/completion)
+- yaml-language-server (optional, recommended for validation/completion)
 
 ## Installation
 
@@ -51,6 +52,7 @@ Supports all `$ref` formats:
 | Cross-file, no pointer | `$ref: './schemas/User.yaml'` |
 | Cross-file with pointer | `$ref: './schemas/User.yaml#/properties/email'` |
 | Relative from subdirectory | `$ref: '../openapi.yaml#/components/schemas/UserId'` |
+| Path-item `$ref` (OpenAPI 3.1) | `$ref: './paths/users.yaml'` |
 
 ### Hover Preview (`K`)
 
@@ -80,10 +82,13 @@ Searches all `.yaml`, `.yml`, and `.json` files in the spec root directory.
 
 The plugin activates automatically for files it detects as OpenAPI specs:
 
-- Files matching the configured `patterns` (e.g. `openapi*.yaml`).
 - Files containing a top-level `openapi:` or `swagger:` key.
+- Files matching the configured `patterns` (e.g. `openapi*.yaml`).
 - YAML/JSON files inside a directory tree that contains a root marker file
   (e.g. `openapi.yaml`) — this covers split multi-file specs.
+- Any YAML/JSON file in the same directory when no root marker is found —
+  so specs named `petstore.yaml`, `api-docs.yaml`, etc. work without any
+  extra configuration.
 
 ### Default keymaps (buffer-local, only on OpenAPI files)
 
@@ -98,6 +103,27 @@ The plugin activates automatically for files it detects as OpenAPI specs:
 | Command | Description |
 |---------|-------------|
 | `:OpenAPIReferences` | Find all usages of the definition under cursor |
+| `:OpenAPIDebug` | Print plugin diagnostics for the current buffer |
+
+### Debugging
+
+If navigation isn't working, run `:OpenAPIDebug` on the file. It prints:
+
+```
+openapi-navigator debug
+──────────────────────────────────────────────────
+  buffer:                petstore.yaml
+  detected as OpenAPI:   true
+  spec root:             /project/api
+  indexed files:         12
+  definitions:           347
+  reference keys:        89
+  $ref on cursor:        #/components/schemas/Pet
+  resolves to file:      petstore.yaml
+  pointer line:          142
+  canonical key:         /project/api/petstore.yaml::/components/schemas/Pet
+  references found:      4
+```
 
 ## Configuration
 
@@ -114,7 +140,8 @@ require("openapi-navigator").setup({
     "**/api-docs/**/*.yml",
   },
 
-  -- Root markers used to find the spec root directory (for multi-file specs)
+  -- Root markers used to find the spec root directory (for multi-file specs).
+  -- When none of these are found, the current file's directory is used as root.
   root_markers = {
     "openapi.yaml",
     "openapi.yml",
@@ -146,7 +173,7 @@ deeply nested directory structures work correctly:
 
 ```
 api/
-├── openapi.yaml                   ← root (contains openapi: 3.0.0)
+├── openapi.yaml                   ← root (contains openapi: 3.0.3)
 ├── paths/
 │   └── users.yaml                 ← $ref: '../schemas/User.yaml'
 └── schemas/
@@ -155,6 +182,21 @@ api/
 ```
 
 The ref index is built lazily on first use and invalidated on file save.
+When no root marker file is present, the current file's directory is scanned,
+so single-file specs and unconventionally named specs (e.g. `petstore.yaml`)
+work without configuration.
+
+## OpenAPI 3.1 support
+
+The plugin handles OpenAPI 3.1-specific constructs transparently:
+
+- **Path-item `$ref`** — `paths` entries that are themselves `$ref` values
+  (e.g. `$ref: './paths/users.yaml'`) are indexed and navigable.
+- **Webhook `$ref`** — `webhooks` entries are scanned for `$ref` values.
+- **Nullable type arrays** — `type: ["string", "null"]` does not confuse
+  the schema block extractor.
+- **`prefixItems`, `const`, `$schema`** — treated as regular keys in the
+  indentation walker; no special handling needed.
 
 ## Architecture
 

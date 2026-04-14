@@ -1,0 +1,364 @@
+*openapi-navigator.txt*   Navigate OpenAPI/Swagger specs with $ref awareness
+
+==============================================================================
+CONTENTS                                        *openapi-navigator-contents*
+
+  1. Introduction ................. |openapi-navigator-intro|
+  2. Requirements ................. |openapi-navigator-requirements|
+  3. Installation ................. |openapi-navigator-installation|
+  4. Usage ........................ |openapi-navigator-usage|
+  5. Commands ..................... |openapi-navigator-commands|
+  6. Configuration ................ |openapi-navigator-config|
+  7. Detection .................... |openapi-navigator-detection|
+  8. How It Works ................. |openapi-navigator-internals|
+  9. OpenAPI 3.1 .................. |openapi-navigator-31|
+  10. Extending ................... |openapi-navigator-extending|
+  11. Lua API ..................... |openapi-navigator-api|
+
+==============================================================================
+1. INTRODUCTION                                 *openapi-navigator-intro*
+
+openapi-navigator.nvim is a pure-Lua plugin for navigating OpenAPI/Swagger
+specification files.  It complements yaml-language-server (which handles
+validation and completion) with navigation features that LSP does not provide:
+
+  - Jump to the target of any `$ref` value (|gd|)
+  - Preview the referenced schema in a floating window (|K|)
+  - Find every location that references a definition (|gr|)
+
+No external binaries, no Treesitter parsers, no Python.  Supports OpenAPI 3.0,
+OpenAPI 3.1, and Swagger 2.0 in YAML and JSON, including multi-file specs that
+use relative `$ref` paths across directories.
+
+==============================================================================
+2. REQUIREMENTS                                 *openapi-navigator-requirements*
+
+  - Neovim >= 0.9
+  - yaml-language-server (optional, recommended for validation/completion)
+
+==============================================================================
+3. INSTALLATION                                 *openapi-navigator-installation*
+
+With lazy.nvim: >
+    {
+      "akyrey/openapi-navigator.nvim",
+      ft   = { "yaml", "json" },
+      opts = {},
+    }
+<
+With packer.nvim: >
+    use {
+      "akyrey/openapi-navigator.nvim",
+      config = function()
+        require("openapi-navigator").setup()
+      end,
+    }
+<
+==============================================================================
+4. USAGE                                        *openapi-navigator-usage*
+
+The plugin attaches buffer-local keymaps whenever it detects an OpenAPI file.
+See |openapi-navigator-detection| for how detection works.
+
+Go to definition~
+                                                *openapi-navigator-gd*
+Place the cursor anywhere on a `$ref:` line and press |gd|.  The plugin
+resolves the reference and jumps to the definition:
+
+  - Same-file pointer    `$ref: '#/components/schemas/User'`
+  - Cross-file           `$ref: './schemas/User.yaml'`
+  - Cross-file + pointer `$ref: './schemas/User.yaml#/properties/email'`
+  - Parent-directory     `$ref: '../openapi.yaml#/components/schemas/Id'`
+  - Path-item (3.1)      `$ref: './paths/users.yaml'`
+
+Hover preview~
+                                                *openapi-navigator-K*
+Press |K| on a `$ref:` line to open a floating window showing the referenced
+schema's content: type, properties, required fields, description.  Nested
+`$ref` values inside the preview are recursively expanded up to
+`hover.max_depth` levels (default: 2).
+
+When the cursor is not on a `$ref:` line, |K| falls through to
+`vim.lsp.buf.hover()` so your LSP hover still works normally.
+
+Find all references~
+                                                *openapi-navigator-gr*
+Press |gr| (or run |:OpenAPIReferences|) to find every `$ref` pointing to the
+definition under the cursor.  Results are loaded into the quickfix list.
+
+Two modes:
+
+  - Cursor on a `$ref` line  → finds all refs to the same target.
+  - Cursor on a definition   → finds all refs that point to it.
+
+Navigate results with |]q| and |[q|.
+
+Multi-file specs~
+
+The plugin resolves `$ref` paths relative to the file that contains them, so
+nested directory structures work without configuration: >
+
+    api/
+    ├── openapi.yaml
+    ├── paths/
+    │   └── users.yaml       $ref: '../schemas/User.yaml'
+    └── schemas/
+        ├── User.yaml        $ref: './Address.yaml#/properties/city'
+        └── Address.yaml
+<
+==============================================================================
+5. COMMANDS                                     *openapi-navigator-commands*
+
+                                                *:OpenAPIReferences*
+:OpenAPIReferences
+    Find all `$ref` usages of the definition under cursor and open the
+    quickfix list.  Equivalent to pressing |gr| in normal mode.
+
+                                                *:OpenAPIDebug*
+:OpenAPIDebug
+    Print plugin diagnostics for the current buffer via |vim.notify()|.
+    Useful when navigation is not working as expected.  Shows: >
+
+        openapi-navigator debug
+        --------------------------------------
+          buffer:                petstore.yaml
+          detected as OpenAPI:   true
+          spec root:             /project/api
+          indexed files:         12
+          definitions:           347
+          reference keys:        89
+          $ref on cursor:        #/components/schemas/Pet
+          resolves to file:      petstore.yaml
+          pointer line:          142
+          canonical key:         /project/api/petstore.yaml::/…/Pet
+          references found:      4
+<
+==============================================================================
+6. CONFIGURATION                                *openapi-navigator-config*
+
+Pass options to `require("openapi-navigator").setup({ ... })`.  All keys are
+optional; unspecified keys keep their defaults.
+>
+    require("openapi-navigator").setup({
+
+      -- Glob patterns for files to treat as OpenAPI specs.
+      -- Matched against the full path and the basename.
+      patterns = {
+        "openapi*.yaml",
+        "openapi*.yml",
+        "openapi*.json",
+        "swagger*.yaml",
+        "swagger*.json",
+        "**/api-docs/**/*.yaml",
+        "**/api-docs/**/*.yml",
+      },
+
+      -- Filenames that mark the root of a multi-file spec.
+      -- The plugin walks up from the current file until it finds one.
+      -- Falls back to the current file's directory when none are found,
+      -- so specs named petstore.yaml or api-docs.yaml need no config.
+      root_markers = {
+        "openapi.yaml",
+        "openapi.yml",
+        "openapi.json",
+        "swagger.yaml",
+        "swagger.json",
+      },
+
+      -- Buffer-local keymaps (set any value to false to disable).
+      keymaps = {
+        goto_definition = "gd",
+        hover           = "K",
+        find_references = "gr",
+      },
+
+      -- Floating hover window dimensions and $ref recursion depth.
+      hover = {
+        max_width  = 80,
+        max_height = 30,
+        max_depth  = 2,
+      },
+    })
+<
+==============================================================================
+7. DETECTION                                    *openapi-navigator-detection*
+
+When a YAML or JSON buffer is entered the plugin runs a three-step check:
+
+  1. Content scan — reads the first 20 lines and looks for a top-level
+     `openapi:` or `swagger:` key (YAML) or `"openapi":` / `"swagger":`
+     (JSON).  A match here is sufficient; no further steps are needed.
+
+  2. Pattern match + root marker walk — if step 1 did not match, checks
+     whether the filename matches a configured `patterns` glob and, if so,
+     walks parent directories looking for a `root_markers` file.  This
+     catches sub-files in multi-file specs (e.g. `schemas/User.yaml`).
+
+  3. Fallback — if neither step matched, the buffer is not treated as an
+     OpenAPI file and no keymaps are attached.
+
+Detection results are cached per buffer and cleared on |BufDelete|.  The
+cache is also cleared on |BufWritePost| so that editing a file's `openapi:`
+header retroactively activates the plugin.
+
+==============================================================================
+8. HOW IT WORKS                                 *openapi-navigator-internals*
+
+$ref parsing~
+
+The plugin reads the current line and extracts the `$ref` value using Lua
+pattern matching — no YAML parser is required: >
+
+    YAML:  $ref: '#/components/schemas/User'
+    YAML:  $ref: './schemas/User.yaml#/properties/email'
+    JSON:  "$ref": "#/components/schemas/Widget"
+<
+The value is split on `#` to separate the file path from the JSON pointer.
+Relative file paths are resolved against the containing file's directory
+via `vim.fn.resolve()`.
+
+JSON pointer resolution~
+
+A JSON pointer such as `/components/schemas/User` is resolved by walking the
+target file line-by-line, tracking indentation depth.  No external YAML
+library is needed — the algorithm only needs to find key names and their
+indent level, not parse full YAML structure.
+
+The same algorithm runs in reverse to compute the pointer path of the key
+under the cursor (used by |:OpenAPIReferences| when the cursor is on a
+definition rather than a `$ref`).
+
+Ref index~
+
+On the first navigation in a buffer the plugin scans all `.yaml`, `.yml`,
+and `.json` files under the spec root and builds two lookup tables:
+
+  `_definitions`  pointer → { file, line, col }
+  `_references`   canonical key → list of { file, line, col, text }
+
+Files are skipped when their modification time has not changed since the last
+scan.  The index for a saved file is invalidated and immediately rebuilt on
+|BufWritePost|.  Each project directory gets its own cached root so multiple
+specs open in one session do not interfere.
+
+==============================================================================
+9. OPENAPI 3.1                                  *openapi-navigator-31*
+
+OpenAPI 3.1 is supported transparently.  Specific constructs handled:
+
+Path-item $ref~
+    In 3.1 a path entry may itself be a `$ref` to an external file: >
+        paths:
+          /users/{id}:
+            $ref: './paths/users.yaml'
+<    This is indexed as a cross-file reference and `gd` jumps to the file.
+
+Webhooks~
+    `webhooks:` entries are scanned for `$ref` values exactly like `paths:`.
+
+Nullable type arrays~
+    `type: ["string", "null"]` (3.1 style) does not interfere with schema
+    block extraction because the indentation walker treats `type` as a
+    regular key regardless of its value.
+
+3.1-only keywords~
+    `prefixItems`, `const`, `$schema`, `unevaluatedProperties`, and similar
+    keywords are treated as ordinary YAML keys in the indentation walker; no
+    special handling is required.
+
+==============================================================================
+10. EXTENDING                                   *openapi-navigator-extending*
+
+Framework route linking~
+
+Route ↔ spec linking for specific frameworks (Laravel, Express, Django, …)
+is planned as a generic adapter system.  Each adapter will implement: >
+
+    require("openapi-navigator").register_framework({
+      name        = "laravel",
+
+      -- Return true when this adapter should activate for a spec root.
+      detect      = function(root) ... end,
+
+      -- Return a list of { method, uri, handler } route entries.
+      list_routes = function(opts) ... end,
+
+      -- Find the route matching an OpenAPI path + HTTP method.
+      match_route = function(path, method, routes) ... end,
+
+      -- Find the OpenAPI path definition for a controller handler.
+      find_spec   = function(handler, spec_root) ... end,
+    })
+<
+Built-in adapters (starting with Laravel) are planned for a future release.
+Until then, the navigation features in sections 4–5 work for all specs.
+
+==============================================================================
+11. LUA API                                     *openapi-navigator-api*
+
+                                                *openapi-navigator.setup()*
+`require("openapi-navigator").setup(opts?)`
+    Initialise the plugin.  Must be called once.  Creates autocommands,
+    registers user commands, and applies user options.
+    See |openapi-navigator-config| for available options.
+
+                                                *openapi-navigator.is_openapi_buffer()*
+`require("openapi-navigator").is_openapi_buffer(bufnr)`
+    Return `true` when `bufnr` is detected as an OpenAPI file.
+    Result is cached; see |openapi-navigator-detection|.
+
+                                                *openapi-navigator.get_spec_root()*
+`require("openapi-navigator").get_spec_root(bufnr?)`
+    Return the spec root directory for `bufnr` (default: current buffer).
+    Walks parent directories for a root marker; falls back to the buffer
+    file's own directory.
+
+                                                *openapi-navigator-resolver*
+`require("openapi-navigator.resolver")`
+
+  `.parse_ref_at_cursor()` → `{raw, file, pointer} | nil`
+    Parse the `$ref` value on the current cursor line.
+    Returns `nil` when the cursor is not on a `$ref` line.
+    `file` is `nil` for same-file refs; `pointer` is `nil` when there is
+    no `#` fragment.
+
+  `.parse_ref_from_line(line, is_json)` → `{raw, file, pointer} | nil`
+    Same as above but operates on an arbitrary line string.
+
+  `.resolve_file(ref, bufnr?)` → `string | nil`
+    Resolve a parsed ref's file path to an absolute path.
+    Returns `nil` when the file does not exist.
+
+  `.resolve_pointer(filepath, pointer)` → `{line, col} | nil`
+    Walk `filepath` line-by-line to find the JSON pointer.
+    Returns 1-indexed `line` and 0-indexed `col`, or `nil` when not found.
+
+  `.goto_definition()` → `boolean`
+    Jump to the `$ref` target under the cursor.
+    Displays a notification and returns `false` on failure.
+
+                                                *openapi-navigator-index*
+`require("openapi-navigator.index")`
+
+  `.ensure_indexed(bufnr)`
+    Scan all spec files under the root (mtime-cached).  Called automatically
+    on |BufEnter|; safe to call manually.
+
+  `.invalidate(bufnr)`
+    Clear stale entries for the buffer's file and immediately re-index it.
+    Called automatically on |BufWritePost|.
+
+  `.get_definition(canonical_key)` → `{file, line, col} | nil`
+    Look up a definition location by canonical key.
+
+  `.get_references(canonical_key)` → `{file, line, col, text}[]`
+    Return all source locations that reference the given canonical key.
+
+  `.get_pointer_at_cursor(bufnr?)` → `string | nil`
+    Compute the JSON pointer path of the definition the cursor is inside.
+
+  `.canonical_key(abs_file, pointer?)` → `string`
+    Build a canonical lookup key from an absolute file path and an optional
+    JSON pointer string.  Format: `<abs_file>::<pointer_or_empty>`.
+
+vim:tw=78:ts=8:et:ft=help:norl:
