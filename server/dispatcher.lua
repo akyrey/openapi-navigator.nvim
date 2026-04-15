@@ -1,32 +1,37 @@
 --- JSON-RPC method dispatcher.
 --- Routes incoming LSP requests and notifications to the appropriate handlers.
 
-local store      = require("document_store")
-local index      = require("index")
-local resolver   = require("resolver")
-local hover_mod  = require("hover")
-local refs_mod   = require("references")
-local fs         = require("fs")
-local log        = require("log")
+local json = require("json")
+local store = require("document_store")
+local index = require("index")
+local resolver = require("resolver")
+local hover_mod = require("hover")
+local refs_mod = require("references")
+local comp_mod = require("completion")
+local fs = require("fs")
+local log = require("log")
 
 local M = {}
 
 -- ── Server state ──────────────────────────────────────────────────────────────
 
-local _initialized  = false
-local _shutdown     = false
-local _init_options = {}  -- passed from client via initialize params
+local _initialized = false
+local _shutdown = false
+local _init_options = {} -- passed from client via initialize params
 
 --- Default configuration (overridden by initializationOptions).
 local _config = {
 	root_markers = {
-		"openapi.yaml", "openapi.yml", "openapi.json",
-		"swagger.yaml", "swagger.json",
+		"openapi.yaml",
+		"openapi.yml",
+		"openapi.json",
+		"swagger.yaml",
+		"swagger.json",
 	},
 	hover = {
-		max_width  = 80,
+		max_width = 80,
 		max_height = 30,
-		max_depth  = 2,
+		max_depth = 2,
 	},
 }
 
@@ -35,24 +40,26 @@ local _config = {
 local function make_response(id, result)
 	return {
 		jsonrpc = "2.0",
-		id      = id,
-		result  = result,
+		id = id,
+		-- LSP requires "result" to be present (even as null) in every response.
+		-- Lua nil table fields are omitted by pairs(), so we use json.null instead.
+		result = (result == nil) and json.null or result,
 	}
 end
 
 local function make_error(id, code, message)
 	return {
 		jsonrpc = "2.0",
-		id      = id,
-		error   = { code = code, message = message },
+		id = id,
+		error = { code = code, message = message },
 	}
 end
 
 -- Standard JSON-RPC / LSP error codes
-local ERR_NOT_INITIALIZED  = -32002
-local ERR_INVALID_REQUEST  = -32600
+local ERR_NOT_INITIALIZED = -32002
+local ERR_INVALID_REQUEST = -32600
 local ERR_METHOD_NOT_FOUND = -32601
-local ERR_INTERNAL         = -32603
+local ERR_INTERNAL = -32603
 
 -- ── Handler table ─────────────────────────────────────────────────────────────
 
@@ -83,15 +90,20 @@ handlers["initialize"] = function(id, params)
 			-- Full document sync: always receive full text on change
 			textDocumentSync = {
 				openClose = true,
-				change    = 1,  -- TextDocumentSyncKind.Full
-				save      = { includeText = false },
+				change = 1, -- TextDocumentSyncKind.Full
+				save = { includeText = false },
 			},
-			definitionProvider  = true,
-			hoverProvider       = true,
-			referencesProvider  = true,
+			definitionProvider = true,
+			hoverProvider = true,
+			referencesProvider = true,
+			completionProvider = {
+				-- Trigger on '#' (local ref) and '/' (deeper pointer path)
+				triggerCharacters = { "#", "/" },
+				resolveProvider = false,
+			},
 		},
 		serverInfo = {
-			name    = "openapi-navigator",
+			name = "openapi-navigator",
 			version = "2.0.0",
 		},
 	})
@@ -129,7 +141,7 @@ end
 -- textDocument/didChange ──────────────────────────────────────────────────────
 
 handlers["textDocument/didChange"] = function(_id, params)
-	local doc     = params.textDocument
+	local doc = params.textDocument
 	local changes = params.contentChanges
 	if changes and #changes > 0 then
 		-- We requested full sync (kind=1), so contentChanges[1].text is the full doc
@@ -142,7 +154,7 @@ end
 -- textDocument/didSave ────────────────────────────────────────────────────────
 
 handlers["textDocument/didSave"] = function(_id, params)
-	local uri  = params.textDocument.uri
+	local uri = params.textDocument.uri
 	local path = fs.resolve(fs.uri_to_path(uri))
 	index.invalidate(path)
 	log.debug("didSave %s", uri)
@@ -160,7 +172,7 @@ end
 -- textDocument/definition ─────────────────────────────────────────────────────
 
 handlers["textDocument/definition"] = function(id, params)
-	local uri      = params.textDocument.uri
+	local uri = params.textDocument.uri
 	local position = params.position
 
 	index.ensure_indexed(uri, _config.root_markers)
@@ -180,7 +192,7 @@ handlers["textDocument/definition"] = function(id, params)
 	if not ref.pointer then
 		-- Cross-file ref with no pointer → jump to top of file
 		return make_response(id, {
-			uri   = target_uri,
+			uri = target_uri,
 			range = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 0 } },
 		})
 	end
@@ -192,12 +204,12 @@ handlers["textDocument/definition"] = function(id, params)
 
 	-- LSP positions are 0-indexed
 	local lsp_line = pos.line - 1
-	local lsp_col  = pos.col
+	local lsp_col = pos.col
 
 	return make_response(id, {
-		uri   = target_uri,
+		uri = target_uri,
 		range = {
-			start   = { line = lsp_line, character = lsp_col },
+			start = { line = lsp_line, character = lsp_col },
 			["end"] = { line = lsp_line, character = lsp_col },
 		},
 	})
@@ -206,7 +218,7 @@ end
 -- textDocument/hover ──────────────────────────────────────────────────────────
 
 handlers["textDocument/hover"] = function(id, params)
-	local uri      = params.textDocument.uri
+	local uri = params.textDocument.uri
 	local position = params.position
 
 	local result = hover_mod.hover(uri, position, _config.hover)
@@ -216,11 +228,20 @@ end
 -- textDocument/references ─────────────────────────────────────────────────────
 
 handlers["textDocument/references"] = function(id, params)
-	local uri      = params.textDocument.uri
+	local uri = params.textDocument.uri
 	local position = params.position
 
 	local locs = refs_mod.find(uri, position, _config.root_markers)
 	return make_response(id, #locs > 0 and locs or nil)
+end
+
+-- textDocument/completion ────────────────────────────────────────────────────
+
+handlers["textDocument/completion"] = function(id, params)
+	local uri = params.textDocument.uri
+	local position = params.position
+	local items = comp_mod.complete(uri, position, _config.root_markers)
+	return make_response(id, items)
 end
 
 -- workspace/didChangeWatchedFiles ─────────────────────────────────────────────
@@ -248,7 +269,7 @@ end
 --- @return table|nil
 function M.handle(msg)
 	local method = msg.method
-	local id     = msg.id
+	local id = msg.id
 	local params = msg.params
 
 	if _shutdown and method ~= "exit" then
