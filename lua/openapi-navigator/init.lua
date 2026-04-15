@@ -182,6 +182,25 @@ local _keymaps_attached = {}
 -- Setup
 -- ---------------------------------------------------------------------------
 
+--- Attach keymaps to a buffer and schedule index build if not already done.
+--- Safe to call multiple times — guards via _keymaps_attached.
+--- @param bufnr integer
+local function attach_if_openapi(bufnr)
+	if _keymaps_attached[bufnr] then
+		return
+	end
+	if not is_openapi_buffer(bufnr) then
+		return
+	end
+	attach_keymaps(bufnr)
+	_keymaps_attached[bufnr] = true
+	vim.schedule(function()
+		if vim.api.nvim_buf_is_valid(bufnr) then
+			require("openapi-navigator.index").ensure_indexed(bufnr)
+		end
+	end)
+end
+
 --- Main entry point. Call this from your config:
 ---   require("openapi-navigator").setup(opts)
 --- @param opts table|nil
@@ -195,16 +214,29 @@ function M.setup(opts)
 		group = group,
 		pattern = { "*.yaml", "*.yml", "*.json" },
 		callback = function(ev)
-			if is_openapi_buffer(ev.buf) and not _keymaps_attached[ev.buf] then
-				attach_keymaps(ev.buf)
-				_keymaps_attached[ev.buf] = true
-				-- Trigger lazy index build (non-blocking: index does its own scheduling)
-				vim.schedule(function()
-					if vim.api.nvim_buf_is_valid(ev.buf) then
-						require("openapi-navigator.index").ensure_indexed(ev.buf)
-					end
-				end)
-			end
+			attach_if_openapi(ev.buf)
+		end,
+	})
+
+	-- Re-attach after LSP attaches so our keymaps win over yaml-language-server's
+	-- buffer-local gd / K mappings.
+	-- vim.schedule defers to the next event loop tick so we run AFTER all other
+	-- LspAttach handlers (including the user's lspconfig on_attach callbacks).
+	vim.api.nvim_create_autocmd("LspAttach", {
+		group = group,
+		callback = function(ev)
+			local bufnr = ev.buf
+			vim.schedule(function()
+				if not vim.api.nvim_buf_is_valid(bufnr) then
+					return
+				end
+				local name = vim.api.nvim_buf_get_name(bufnr)
+				if (name:match("%.[yY][aA]?[mM][lL]$") or name:match("%.json$")) and is_openapi_buffer(bufnr) then
+					-- Re-set keymaps so they override whatever the LSP just installed.
+					attach_keymaps(bufnr)
+					_keymaps_attached[bufnr] = true
+				end
+			end)
 		end,
 	})
 
@@ -235,6 +267,19 @@ function M.setup(opts)
 		require("openapi-navigator.references").find()
 	end, { desc = "Find all $ref usages of the definition under cursor" })
 
+	-- Handle buffers that were already open before setup() was called.
+	-- This is the common case when lazy.nvim loads the plugin on the first
+	-- YAML BufEnter — that event already fired, so the autocmd above won't
+	-- trigger for the current buffer.
+	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_loaded(bufnr) then
+			local name = vim.api.nvim_buf_get_name(bufnr)
+			if name:match("%.[yY][aA]?[mM][lL]$") or name:match("%.json$") then
+				attach_if_openapi(bufnr)
+			end
+		end
+	end
+
 	vim.api.nvim_create_user_command("OpenAPIDebug", function()
 		local idx = require("openapi-navigator.index")
 		local res = require("openapi-navigator.resolver")
@@ -250,6 +295,7 @@ function M.setup(opts)
 		table.insert(lines, string.rep("─", 50))
 		add("buffer", vim.fn.fnamemodify(file, ":~:."))
 		add("detected as OpenAPI", tostring(is_openapi_buffer(bufnr)))
+		add("keymaps attached", tostring(_keymaps_attached[bufnr] == true))
 		add("spec root", tostring(M.get_spec_root(bufnr)))
 
 		local n_def, n_ref, n_files = 0, 0, 0
