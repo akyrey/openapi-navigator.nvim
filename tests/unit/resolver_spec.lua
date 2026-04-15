@@ -1,16 +1,21 @@
--- Tests for resolver.lua — $ref parsing, file resolution, and JSON pointer walking.
+-- Tests for server/resolver.lua — $ref parsing, file resolution, and JSON pointer walking.
 
-local resolver = require("openapi-navigator.resolver")
+local resolver = require("resolver")
+local store    = require("document_store")
+local fs       = require("fs")
 
--- Resolve fixture paths the way the plugin does (handles /tmp→/private/tmp on macOS).
+-- Resolve fixture paths (handles /tmp→/private/tmp on macOS).
 local fixture_dir = vim.fn.resolve(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h") .. "/fixtures")
-local spec30 = fixture_dir .. "/openapi30.yaml"
-local spec31 = fixture_dir .. "/openapi31.yaml"
-local spec_json = fixture_dir .. "/openapi30.json"
-local user_yaml = fixture_dir .. "/schemas/User.yaml"
-local addr_yaml = fixture_dir .. "/schemas/Address.yaml"
+local spec30      = fixture_dir .. "/openapi30.yaml"
+local spec31      = fixture_dir .. "/openapi31.yaml"
+local spec_json   = fixture_dir .. "/openapi30.json"
+local user_yaml   = fixture_dir .. "/schemas/User.yaml"
+local addr_yaml   = fixture_dir .. "/schemas/Address.yaml"
 
--- ── parse_ref_from_line ──────────────────────────────────────────────────────
+local spec30_uri  = fs.path_to_uri(spec30)
+local user_uri    = fs.path_to_uri(user_yaml)
+
+-- ── parse_ref_from_line — YAML ───────────────────────────────────────────────
 
 describe("parse_ref_from_line — YAML", function()
 	it("returns nil for a line without $ref", function()
@@ -99,47 +104,58 @@ describe("parse_ref_from_line — JSON", function()
 	end)
 end)
 
--- ── resolve_file ─────────────────────────────────────────────────────────────
+-- ── parse_ref_at (LSP position-based) ────────────────────────────────────────
+
+describe("parse_ref_at", function()
+	after_each(function()
+		store.close(spec30_uri)
+	end)
+
+	it("returns nil when not on a $ref line", function()
+		store.open(spec30_uri, "openapi: '3.0.3'\ninfo:\n  title: Test\n", 1)
+		local ref = resolver.parse_ref_at(spec30_uri, { line = 0, character = 0 })
+		assert.is_nil(ref)
+	end)
+
+	it("extracts ref from a document-store line", function()
+		store.open(spec30_uri, "openapi: '3.0.3'\n  $ref: '#/components/schemas/User'\n", 1)
+		-- Line index 1 (0-indexed) contains the $ref
+		local ref = resolver.parse_ref_at(spec30_uri, { line = 1, character = 5 })
+		assert.is_not_nil(ref)
+		assert.are.equal("/components/schemas/User", ref.pointer)
+	end)
+
+	it("falls back to disk when document is not in store", function()
+		-- Line 14 (0-indexed) = line 15 (1-indexed) in openapi30.yaml has a $ref
+		local ref = resolver.parse_ref_at(spec30_uri, { line = 14, character = 20 })
+		assert.is_not_nil(ref)
+	end)
+end)
+
+-- ── resolve_file ──────────────────────────────────────────────────────────────
 
 describe("resolve_file", function()
-	-- We need a buffer associated with the fixture file for resolve_file to work.
-	local bufnr
-
-	before_each(function()
-		bufnr = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_name(bufnr, spec30)
-	end)
-
-	after_each(function()
-		if vim.api.nvim_buf_is_valid(bufnr) then
-			vim.api.nvim_buf_delete(bufnr, { force = true })
-		end
-	end)
-
-	it("returns the current file for a same-file ref", function()
-		local ref = { file = nil }
-		local result = resolver.resolve_file(ref, bufnr)
+	it("returns the source file path for a same-file ref", function()
+		local ref    = { file = nil }
+		local result = resolver.resolve_file(ref, spec30_uri)
 		assert.are.equal(vim.fn.resolve(spec30), result)
 	end)
 
 	it("resolves a relative cross-file ref", function()
-		local ref = { file = "./schemas/User.yaml" }
-		local result = resolver.resolve_file(ref, bufnr)
+		local ref    = { file = "./schemas/User.yaml" }
+		local result = resolver.resolve_file(ref, spec30_uri)
 		assert.are.equal(vim.fn.resolve(user_yaml), result)
 	end)
 
 	it("resolves a relative parent-directory ref from a subdirectory file", function()
-		local sub_bufnr = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_name(sub_bufnr, user_yaml)
-		local ref = { file = "../openapi30.yaml" }
-		local result = resolver.resolve_file(ref, sub_bufnr)
+		local ref    = { file = "../openapi30.yaml" }
+		local result = resolver.resolve_file(ref, user_uri)
 		assert.are.equal(vim.fn.resolve(spec30), result)
-		vim.api.nvim_buf_delete(sub_bufnr, { force = true })
 	end)
 
 	it("returns nil for a non-existent file", function()
-		local ref = { file = "./does-not-exist.yaml" }
-		local result = resolver.resolve_file(ref, bufnr)
+		local ref    = { file = "./does-not-exist.yaml" }
+		local result = resolver.resolve_file(ref, spec30_uri)
 		assert.is_nil(result)
 	end)
 end)
@@ -163,7 +179,6 @@ describe("resolve_pointer — OpenAPI 3.0 YAML", function()
 		local pos = resolver.resolve_pointer(spec30, "/components/schemas/UserId")
 		assert.is_not_nil(pos)
 		assert.is_true(pos.line > 0)
-		-- Verify the resolved line actually contains the key
 		local lines = vim.fn.readfile(spec30)
 		assert.is_not_nil(lines[pos.line]:find("UserId"))
 	end)
@@ -186,7 +201,6 @@ describe("resolve_pointer — OpenAPI 3.0 YAML", function()
 		local pos = resolver.resolve_pointer(spec30, "/components/schemas/UserSummary/properties/id")
 		assert.is_not_nil(pos)
 		local lines = vim.fn.readfile(spec30)
-		-- The line should be indented more than the schema definition line
 		assert.is_true(pos.col > 0)
 		assert.is_not_nil(lines[pos.line]:find("id"))
 	end)
@@ -320,10 +334,6 @@ end)
 -- ── JSON pointer escape sequences ────────────────────────────────────────────
 
 describe("resolve_pointer — JSON pointer escape sequences", function()
-	-- ~0 decodes to ~, ~1 decodes to /
-	-- We test the decoding indirectly: a pointer that encodes a key containing
-	-- a slash would use ~1. For the test fixtures we use keys without slashes,
-	-- so we test the decode helper is at least non-destructive on normal segments.
 	it("resolves a pointer with no escape sequences unchanged", function()
 		local pos = resolver.resolve_pointer(spec30, "/components/schemas/UserId")
 		assert.is_not_nil(pos)

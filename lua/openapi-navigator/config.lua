@@ -1,7 +1,7 @@
 local M = {}
 
 M.defaults = {
-	-- File patterns to treat as OpenAPI specs
+	-- File patterns to treat as OpenAPI specs (glob format)
 	patterns = {
 		"openapi*.yaml",
 		"openapi*.yml",
@@ -21,18 +21,11 @@ M.defaults = {
 		"swagger.json",
 	},
 
-	-- Keymaps (set to false to disable)
-	keymaps = {
-		goto_definition = "gd",
-		hover = "K",
-		find_references = "gr",
-	},
-
-	-- Hover preview options
+	-- Hover preview options (passed to the LSP server as initializationOptions)
 	hover = {
-		max_width = 80,
+		max_width  = 80,
 		max_height = 30,
-		max_depth = 2,
+		max_depth  = 2,
 	},
 }
 

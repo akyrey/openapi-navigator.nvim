@@ -1,12 +1,13 @@
 # openapi-navigator.nvim
 
-A pure-Lua Neovim plugin for navigating OpenAPI/Swagger specification files.
+A pure-Lua Neovim plugin for navigating OpenAPI/Swagger specification files —
+implemented as a standalone **LSP server** so navigation works seamlessly
+alongside any other LSP client setup.
 
-Designed to complement **yaml-language-server** (which handles validation and
-completion) with navigation capabilities that LSP alone doesn't provide:
-jump to `$ref` definitions, hover schema previews, and find-all-references.
-Supports both OpenAPI 3.0 and 3.1 specs, in YAML and JSON, across single-file
-and multi-file layouts using relative `$ref` paths.
+Uses your existing `gd` / `K` / `gr` mappings without fighting over them.
+Complements **yaml-language-server** (validation, completion) with `$ref`
+navigation that LSP alone doesn't provide. Supports OpenAPI 3.0 and 3.1,
+YAML and JSON, single-file and multi-file specs.
 
 No external binary dependencies. No Treesitter parsers required.
 
@@ -42,7 +43,10 @@ use {
 
 ### Go to Definition (`gd`)
 
-When the cursor is on a `$ref` value, `gd` jumps to the referenced definition.
+When the cursor is on a `$ref` value, your existing `gd` mapping jumps to the
+referenced definition. Works via the standard LSP `textDocument/definition`
+request — FzfLua, Telescope, and `vim.lsp.buf.definition` all route through
+the server automatically.
 
 Supports all `$ref` formats:
 
@@ -56,25 +60,27 @@ Supports all `$ref` formats:
 
 ### Hover Preview (`K`)
 
-Pressing `K` on a `$ref` value opens a floating window showing the target
-schema's content — type, properties, required fields, description — formatted
-as YAML.
+Pressing `K` on a `$ref` value shows the target schema's content — type,
+properties, required fields, description — formatted as YAML in a hover popup.
 
 Nested `$ref` values inside the preview are recursively expanded up to
 `hover.max_depth` levels (default: 2).
 
-When the cursor is **not** on a `$ref`, `K` falls back to `vim.lsp.buf.hover()`
-so yaml-language-server hover still works normally.
+When the cursor is **not** on a `$ref`, the server returns nothing and Neovim
+automatically falls through to yaml-language-server hover — no configuration
+needed.
 
-### Find All References (`gr` / `:OpenAPIReferences`)
+### Find All References (`gr`)
 
-Find every `$ref` pointing to the definition under the cursor and populate the
-quickfix list. Works in two modes:
+Find every `$ref` pointing to the definition under the cursor. Works in two
+modes:
 
 - **Cursor on a `$ref`** — finds all other refs pointing to the same target.
 - **Cursor on a definition key** — finds all refs that point to that definition.
 
-Navigate results with `]q` / `[q` as usual.
+Results are returned as standard LSP locations, so your existing `gr` mapping
+(whether it calls `vim.lsp.buf.references()`, opens a Telescope picker, or a
+quickfix list) works unchanged.
 
 Searches all `.yaml`, `.yml`, and `.json` files in the spec root directory.
 
@@ -85,45 +91,17 @@ The plugin activates automatically for files it detects as OpenAPI specs:
 - Files containing a top-level `openapi:` or `swagger:` key.
 - Files matching the configured `patterns` (e.g. `openapi*.yaml`).
 - YAML/JSON files inside a directory tree that contains a root marker file
-  (e.g. `openapi.yaml`) — this covers split multi-file specs.
-- Any YAML/JSON file in the same directory when no root marker is found —
-  so specs named `petstore.yaml`, `api-docs.yaml`, etc. work without any
-  extra configuration.
+  (e.g. `openapi.yaml`) — covers split multi-file specs.
 
-### Default keymaps (buffer-local, only on OpenAPI files)
-
-| Key | Action |
-|-----|--------|
-| `gd` | Go to `$ref` definition |
-| `K` | Hover preview (falls back to LSP hover when not on a `$ref`) |
-| `gr` | Find all references → quickfix |
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `:OpenAPIReferences` | Find all usages of the definition under cursor |
-| `:OpenAPIDebug` | Print plugin diagnostics for the current buffer |
+No plugin-specific keymaps are registered. Navigation uses your existing LSP
+keymaps — whatever you have bound to `gd`, `K`, and `gr` will just work.
 
 ### Debugging
 
-If navigation isn't working, run `:OpenAPIDebug` on the file. It prints:
+Open an OpenAPI file, then:
 
-```
-openapi-navigator debug
-──────────────────────────────────────────────────
-  buffer:                petstore.yaml
-  detected as OpenAPI:   true
-  spec root:             /project/api
-  indexed files:         12
-  definitions:           347
-  reference keys:        89
-  $ref on cursor:        #/components/schemas/Pet
-  resolves to file:      petstore.yaml
-  pointer line:          142
-  canonical key:         /project/api/petstore.yaml::/components/schemas/Pet
-  references found:      4
-```
+- `:LspInfo` — confirm `openapi-navigator` is attached to the buffer.
+- `:LspLog` — see the server's diagnostic output if something isn't working.
 
 ## Configuration
 
@@ -148,13 +126,6 @@ require("openapi-navigator").setup({
     "openapi.json",
     "swagger.yaml",
     "swagger.json",
-  },
-
-  -- Keymaps (set any to false to disable)
-  keymaps = {
-    goto_definition  = "gd",
-    hover            = "K",
-    find_references  = "gr",
   },
 
   -- Hover preview options
@@ -183,52 +154,43 @@ api/
 
 The ref index is built lazily on first use and invalidated on file save.
 When no root marker file is present, the current file's directory is scanned,
-so single-file specs and unconventionally named specs (e.g. `petstore.yaml`)
-work without configuration.
+so single-file specs work without configuration.
 
 ## OpenAPI 3.1 support
 
 The plugin handles OpenAPI 3.1-specific constructs transparently:
 
-- **Path-item `$ref`** — `paths` entries that are themselves `$ref` values
-  (e.g. `$ref: './paths/users.yaml'`) are indexed and navigable.
+- **Path-item `$ref`** — `paths` entries that are `$ref` values are indexed and navigable.
 - **Webhook `$ref`** — `webhooks` entries are scanned for `$ref` values.
-- **Nullable type arrays** — `type: ["string", "null"]` does not confuse
-  the schema block extractor.
-- **`prefixItems`, `const`, `$schema`** — treated as regular keys in the
-  indentation walker; no special handling needed.
+- **Nullable type arrays** — `type: ["string", "null"]` does not confuse the schema block extractor.
+- **`prefixItems`, `const`, `$schema`** — treated as regular keys; no special handling needed.
 
 ## Architecture
+
+The plugin runs as a standalone Lua LSP server launched via
+`nvim --headless -l server/main.lua` (Neovim's built-in LuaJIT — no extra
+runtime needed on PATH).
 
 ```
 openapi-navigator.nvim/
 ├── plugin/
 │   └── openapi-navigator.vim      # Double-load guard
-└── lua/openapi-navigator/
-    ├── init.lua                   # setup(), detection, autocommands, keymaps
-    ├── config.lua                 # User options with defaults
+├── lua/openapi-navigator/
+│   ├── init.lua                   # OpenAPI detection + vim.lsp.start()
+│   └── config.lua                 # User options with defaults
+└── server/                        # Standalone LSP server (no vim.* deps)
+    ├── main.lua                   # Entry point: stdio → dispatcher loop
+    ├── rpc.lua                    # JSON-RPC 2.0 framing
+    ├── dispatcher.lua             # LSP method router
     ├── resolver.lua               # $ref parsing + JSON pointer resolution
-    ├── index.lua                  # Bidirectional ref index (definitions ↔ references)
-    ├── hover.lua                  # Floating preview with $ref expansion
-    └── references.lua             # Find all usages → quickfix
+    ├── index.lua                  # Bidirectional ref index
+    ├── hover.lua                  # Hover response builder
+    ├── references.lua             # Find-references response builder
+    ├── document_store.lua         # In-memory open file contents
+    ├── workspace.lua              # Root detection + file globbing
+    └── fs.lua                     # Pure-Lua file ops (no vim.fn)
 ```
 
-Data flow: **cursor line → resolver extracts `$ref` → file + pointer resolved →
-index provides reverse lookups → results presented via Neovim APIs**.
-
-## Extending — Framework Route Linking
-
-Framework-specific route ↔ spec linking (e.g. Laravel, Express, Django) is
-planned as a generic adapter system. Adapters will register themselves with:
-
-```lua
-require("openapi-navigator").register_framework({
-  name        = "laravel",
-  detect      = function(root) ... end,
-  list_routes = function(opts) ... end,
-  match_route = function(path, method, routes) ... end,
-  find_spec   = function(handler, spec_root) ... end,
-})
-```
-
-A built-in Laravel adapter is planned for a future release.
+Data flow: **LSP request → dispatcher → resolver extracts `$ref` + walks
+JSON pointer → index provides reverse lookups → Location / Hover / Location[]
+returned to client**.

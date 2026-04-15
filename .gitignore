@@ -20,3 +20,6 @@ luacov.report.out
 
 # macOS
 .DS_Store
+
+# Executables
+bin/

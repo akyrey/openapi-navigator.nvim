@@ -1,42 +1,47 @@
--- Tests for hover.lua — target file resolution and block extraction.
+-- Tests for hover.lua — target-file resolution and block extraction.
+-- hover._resolve_target_file no longer exists; resolution is done via
+-- resolver.resolve_file(ref, source_uri) — same semantics, public API.
 
-local config = require("openapi-navigator.config")
-local hover = require("openapi-navigator.hover")
-local resolver = require("openapi-navigator.resolver")
-
-config.build({})
+local resolver = require("resolver")
+local fs       = require("fs")
 
 local fixture_dir = vim.fn.resolve(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h") .. "/fixtures")
-local spec30 = vim.fn.resolve(fixture_dir .. "/openapi30.yaml")
-local spec31 = vim.fn.resolve(fixture_dir .. "/openapi31.yaml")
+local spec30    = vim.fn.resolve(fixture_dir .. "/openapi30.yaml")
+local spec31    = vim.fn.resolve(fixture_dir .. "/openapi31.yaml")
 local user_yaml = vim.fn.resolve(fixture_dir .. "/schemas/User.yaml")
 local addr_yaml = vim.fn.resolve(fixture_dir .. "/schemas/Address.yaml")
 
--- ── _resolve_target_file ─────────────────────────────────────────────────────
+local spec30_uri = fs.path_to_uri(spec30)
+local user_uri   = fs.path_to_uri(user_yaml)
 
-describe("hover._resolve_target_file", function()
+-- ── resolver.resolve_file — replaces hover._resolve_target_file ──────────────
+-- (hover._resolve_target_file was an internal helper; its logic now lives in
+-- resolver.resolve_file which is already tested in resolver_spec.lua.  The
+-- tests below verify the same semantic contract from the hover perspective.)
+
+describe("resolver.resolve_file (hover target resolution)", function()
 	it("returns source file for a same-file ref", function()
-		local result = hover._resolve_target_file({ file = nil }, spec30)
+		local result = resolver.resolve_file({ file = nil }, spec30_uri)
 		assert.are.equal(spec30, result)
 	end)
 
 	it("resolves a relative cross-file ref", function()
-		local result = hover._resolve_target_file({ file = "./schemas/User.yaml" }, spec30)
+		local result = resolver.resolve_file({ file = "./schemas/User.yaml" }, spec30_uri)
 		assert.are.equal(user_yaml, result)
 	end)
 
 	it("resolves a ref from a subdirectory back to parent", function()
-		local result = hover._resolve_target_file({ file = "../openapi30.yaml" }, user_yaml)
+		local result = resolver.resolve_file({ file = "../openapi30.yaml" }, user_uri)
 		assert.are.equal(spec30, result)
 	end)
 
 	it("returns nil for a non-existent file", function()
-		local result = hover._resolve_target_file({ file = "./no-such-file.yaml" }, spec30)
+		local result = resolver.resolve_file({ file = "./no-such-file.yaml" }, spec30_uri)
 		assert.is_nil(result)
 	end)
 
 	it("resolves cross-file schema inside schemas/", function()
-		local result = hover._resolve_target_file({ file = "./Address.yaml" }, user_yaml)
+		local result = resolver.resolve_file({ file = "./Address.yaml" }, user_uri)
 		assert.are.equal(addr_yaml, result)
 	end)
 end)

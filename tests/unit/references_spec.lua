@@ -1,95 +1,96 @@
--- Tests for references.lua — canonical key building and quickfix integration.
+-- Tests for references.lua — canonical key building and index lookup.
 -- These tests exercise the logic that maps cursor position → canonical key,
 -- which drives the find-references feature.
 
-local config = require("openapi-navigator.config")
-local index = require("openapi-navigator.index")
-local init = require("openapi-navigator.init")
-local resolver = require("openapi-navigator.resolver")
-
-config.build({})
+local index     = require("index")
+local workspace = require("workspace")
+local store     = require("document_store")
+local resolver  = require("resolver")
+local fs        = require("fs")
 
 local fixture_dir = vim.fn.resolve(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h") .. "/fixtures")
-local spec30 = vim.fn.resolve(fixture_dir .. "/openapi30.yaml")
-local spec31 = vim.fn.resolve(fixture_dir .. "/openapi31.yaml")
+local spec30    = vim.fn.resolve(fixture_dir .. "/openapi30.yaml")
+local spec31    = vim.fn.resolve(fixture_dir .. "/openapi31.yaml")
 local user_yaml = vim.fn.resolve(fixture_dir .. "/schemas/User.yaml")
 
-local _original_get_spec_root = init.get_spec_root
+local spec30_uri = fs.path_to_uri(spec30)
+local spec31_uri = fs.path_to_uri(spec31)
+
+-- Root-markers from default config
+local root_markers = {
+	"openapi.yaml", "openapi.yml", "openapi.json",
+	"swagger.yaml", "swagger.json",
+}
+
+-- Shim workspace.get_root so the index uses the fixture directory as root.
+local _orig_get_root = workspace.get_root
+
 local function use_fixture_root()
-	init.get_spec_root = function(_bufnr)
+	workspace.get_root = function(_dir, _markers)
 		return fixture_dir
 	end
 end
-local function restore_get_spec_root()
-	init.get_spec_root = _original_get_spec_root
+
+local function restore_get_root()
+	workspace.get_root = _orig_get_root
 end
 
 local function reset_index()
-	index._definitions = {}
-	index._references = {}
+	index._definitions   = {}
+	index._references    = {}
 	index._indexed_files = {}
-	index._roots = {}
+	index._roots         = {}
 end
 
 -- ── canonical key building from a $ref line ───────────────────────────────────
 
 describe("canonical key from $ref cursor position", function()
-	local bufnr
+	local test_uri = "file:///tmp/openapi-test-refs-ckey.yaml"
 
 	before_each(function()
 		use_fixture_root()
 		reset_index()
-		index.ensure_indexed(0)
+		index.ensure_indexed(spec30_uri, root_markers)
 	end)
 
 	after_each(function()
-		restore_get_spec_root()
-		if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-			vim.api.nvim_buf_delete(bufnr, { force = true })
-		end
+		store.close(test_uri)
+		restore_get_root()
 	end)
 
-	local function buf_with_line(filepath, line_text)
-		bufnr = vim.api.nvim_create_buf(false, true)
-		vim.api.nvim_buf_set_name(bufnr, filepath)
-		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { line_text })
-		local win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(win, bufnr)
-		vim.api.nvim_win_set_cursor(win, { 1, 0 })
-		return bufnr
-	end
-
 	it("same-file $ref resolves to the correct canonical key", function()
-		buf_with_line(spec30, "  $ref: '#/components/schemas/UserId'")
-		local ref = resolver.parse_ref_at_cursor()
+		store.open(test_uri, "  $ref: '#/components/schemas/UserId'", 1)
+		local ref = resolver.parse_ref_at(test_uri, { line = 0, character = 5 })
 		assert.is_not_nil(ref)
 		assert.is_nil(ref.file)
 		assert.are.equal("/components/schemas/UserId", ref.pointer)
 
-		-- Build the canonical key as references.lua does
-		local target_file = vim.fn.resolve(vim.api.nvim_buf_get_name(0))
+		-- Build the canonical key as references.lua does: same-file ref → use source file
+		local target_file = resolver.resolve_file(ref, spec30_uri)
 		local ckey = index.canonical_key(target_file, ref.pointer)
 		assert.are.equal(spec30 .. "::/components/schemas/UserId", ckey)
 	end)
 
 	it("cross-file $ref resolves to the absolute target file canonical key", function()
-		buf_with_line(spec30, "  $ref: './schemas/User.yaml'")
-		local ref = resolver.parse_ref_at_cursor()
+		store.open(test_uri, "  $ref: './schemas/User.yaml'", 1)
+		local ref = resolver.parse_ref_at(test_uri, { line = 0, character = 5 })
 		assert.is_not_nil(ref)
+		assert.are.equal("./schemas/User.yaml", ref.file)
 
-		local source_dir = vim.fn.fnamemodify(spec30, ":h")
-		local target_file = vim.fn.resolve(source_dir .. "/" .. ref.file)
+		-- resolve_file needs a URI whose dirname matches spec30's parent
+		local target_file = resolver.resolve_file(ref, spec30_uri)
 		local ckey = index.canonical_key(target_file, ref.pointer)
 		assert.are.equal(user_yaml .. "::", ckey)
 	end)
 
 	it("cross-file $ref with pointer resolves to correct canonical key", function()
-		buf_with_line(spec30, "  $ref: './schemas/User.yaml#/properties/email'")
-		local ref = resolver.parse_ref_at_cursor()
+		store.open(test_uri, "  $ref: './schemas/User.yaml#/properties/email'", 1)
+		local ref = resolver.parse_ref_at(test_uri, { line = 0, character = 5 })
 		assert.is_not_nil(ref)
+		assert.are.equal("./schemas/User.yaml", ref.file)
+		assert.are.equal("/properties/email", ref.pointer)
 
-		local source_dir = vim.fn.fnamemodify(spec30, ":h")
-		local target_file = vim.fn.resolve(source_dir .. "/" .. ref.file)
+		local target_file = resolver.resolve_file(ref, spec30_uri)
 		local ckey = index.canonical_key(target_file, ref.pointer)
 		assert.are.equal(user_yaml .. "::/properties/email", ckey)
 	end)
@@ -101,11 +102,11 @@ describe("reference lookup — OpenAPI 3.0", function()
 	before_each(function()
 		use_fixture_root()
 		reset_index()
-		index.ensure_indexed(0)
+		index.ensure_indexed(spec30_uri, root_markers)
 	end)
 
 	after_each(function()
-		restore_get_spec_root()
+		restore_get_root()
 	end)
 
 	it("UserId has references in multiple locations", function()
@@ -140,11 +141,8 @@ describe("reference lookup — OpenAPI 3.0", function()
 	end)
 
 	it("cross-file ref with pointer is captured", function()
-		-- openapi30.yaml has $ref: './schemas/User.yaml#/properties/address'
-		local addr_key = vim.fn.resolve(fixture_dir .. "/schemas/Address.yaml")
 		local k = index.canonical_key(user_yaml, "/properties/address")
 		local refs = index.get_references(k)
-		-- The cross-file+pointer ref from openapi30.yaml to User.yaml#/properties/address
 		assert.is_true(#refs >= 1, "User.yaml#/properties/address should have at least one reference")
 	end)
 end)
@@ -153,18 +151,17 @@ describe("reference lookup — OpenAPI 3.1", function()
 	before_each(function()
 		use_fixture_root()
 		reset_index()
-		index.ensure_indexed(0)
+		index.ensure_indexed(spec31_uri, root_markers)
 	end)
 
 	after_each(function()
-		restore_get_spec_root()
+		restore_get_root()
 	end)
 
 	it("3.1 UserSummary has references (including from webhook)", function()
 		local k = index.canonical_key(spec31, "/components/schemas/UserSummary")
 		local refs = index.get_references(k)
 		assert.is_true(#refs >= 1, "3.1 UserSummary should be referenced")
-		-- At least one reference should be the webhook or paths section
 		local found_in_spec31 = false
 		for _, r in ipairs(refs) do
 			if r.file == spec31 then
@@ -188,29 +185,25 @@ describe("reference lookup — OpenAPI 3.1", function()
 	end)
 end)
 
--- ── get_pointer_at_cursor used for definition-side references ─────────────────
+-- ── get_pointer_at for definition-side references ─────────────────────────────
 
-describe("pointer-at-cursor for definition lookup", function()
-	local bufnr
+describe("pointer-at for definition lookup", function()
+	local test_uri = "file:///tmp/openapi-test-refs-pointer.yaml"
 
 	after_each(function()
-		if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-			vim.api.nvim_buf_delete(bufnr, { force = true })
-		end
+		store.close(test_uri)
 	end)
 
 	it("cursor on a definition key produces a pointer matching expected refs", function()
 		use_fixture_root()
 		reset_index()
-		index.ensure_indexed(0)
+		index.ensure_indexed(spec30_uri, root_markers)
 
-		-- Set up a buffer as if we were editing openapi30.yaml, cursor on UserId line
-		bufnr = vim.api.nvim_create_buf(false, true)
+		-- Load spec30 contents into the document store
 		local lines = vim.fn.readfile(spec30)
-		vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
-		vim.api.nvim_buf_set_name(bufnr, spec30)
+		store.open(test_uri, table.concat(lines, "\n"), 1)
 
-		-- Find the line number for "    UserId:" in the loaded lines
+		-- Find the line number for "    UserId:" in the loaded lines (1-indexed)
 		local userid_line = nil
 		for i, l in ipairs(lines) do
 			if l:match("^    UserId:") then
@@ -220,19 +213,16 @@ describe("pointer-at-cursor for definition lookup", function()
 		end
 		assert.is_not_nil(userid_line, "should find UserId line in spec30")
 
-		local win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(win, bufnr)
-		vim.api.nvim_win_set_cursor(win, { userid_line, 4 })
-
-		local pointer = index.get_pointer_at_cursor(bufnr)
+		-- LSP position is 0-indexed
+		local pointer = index.get_pointer_at(test_uri, { line = userid_line - 1, character = 4 })
 		assert.is_not_nil(pointer)
 		assert.is_not_nil(pointer:find("UserId"), "pointer should include UserId")
 
-		-- Now use this pointer to look up references
+		-- Use this pointer to look up references (key is relative to spec30, not test_uri)
 		local ckey = index.canonical_key(spec30, pointer)
 		local refs = index.get_references(ckey)
 		assert.is_true(#refs >= 2, "UserId should have multiple references when looked up by pointer")
 
-		restore_get_spec_root()
+		restore_get_root()
 	end)
 end)

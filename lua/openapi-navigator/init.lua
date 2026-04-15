@@ -1,37 +1,34 @@
+--- openapi-navigator.nvim — Neovim client.
+--- Detects OpenAPI buffers and starts the LSP server via vim.lsp.start().
+--- All navigation (gd, K, gr) is handled by the server; use your existing
+--- LSP keymaps — no plugin-specific bindings are registered.
+
 local M = {}
 
 local config = require("openapi-navigator.config")
 
--- Cache: bufnr → boolean (is this an OpenAPI buffer?)
+-- ── Detection cache ───────────────────────────────────────────────────────────
+
 local _detection_cache = {}
 
--- ---------------------------------------------------------------------------
--- OpenAPI buffer detection
--- ---------------------------------------------------------------------------
-
 --- Check whether a filename matches any of the configured glob patterns.
---- Uses vim.fn.glob2regpat to convert each glob to a Vim regex, then
---- vim.fn.match to test. Checks both the full path and the basename.
---- @param filename string  basename or full path
+--- @param filename string
 --- @param patterns string[]
 --- @return boolean
 local function matches_pattern(filename, patterns)
 	local base = vim.fn.fnamemodify(filename, ":t")
 	for _, pat in ipairs(patterns) do
 		local re = vim.fn.glob2regpat(pat)
-		if vim.fn.match(filename, re) >= 0 then
-			return true
-		end
-		if vim.fn.match(base, re) >= 0 then
+		if vim.fn.match(filename, re) >= 0 or vim.fn.match(base, re) >= 0 then
 			return true
 		end
 	end
 	return false
 end
 
---- Walk up directories from `dir` looking for any root marker file.
---- Returns the directory containing the marker or nil.
---- @param dir string  starting directory (absolute)
+--- Walk up directories from `dir` looking for any root-marker file.
+--- Returns the directory containing the marker, or nil.
+--- @param dir string
 --- @param markers string[]
 --- @return string|nil
 local function find_root(dir, markers)
@@ -43,23 +40,18 @@ local function find_root(dir, markers)
 			end
 		end
 		local parent = vim.fn.fnamemodify(current, ":h")
-		if parent == current then
-			break
-		end
+		if parent == current then break end
 		current = parent
 	end
 	return nil
 end
 
---- Check if a buffer contains an OpenAPI/Swagger document.
---- Detection strategy (in order):
----   1. Check the detection cache.
----   2. Match the filename against configured patterns.
----   3. Scan the first 20 lines for top-level openapi:/swagger: key.
----   4. Walk parent directories for a root_marker file (split specs).
+--- Detect whether a buffer contains an OpenAPI/Swagger document.
+--- Uses filename patterns, content scan, and root-marker walk.
 --- @param bufnr integer
+--- @param opts table  config options
 --- @return boolean
-local function is_openapi_buffer(bufnr)
+local function is_openapi_buffer(bufnr, opts)
 	if _detection_cache[bufnr] ~= nil then
 		return _detection_cache[bufnr]
 	end
@@ -70,56 +62,31 @@ local function is_openapi_buffer(bufnr)
 		return false
 	end
 
-	-- Only care about yaml/yml/json files
 	if not filepath:match("%.[yY][aA]?[mM][lL]$") and not filepath:match("%.json$") then
 		_detection_cache[bufnr] = false
 		return false
 	end
 
-	local opts = config.options
-
-	-- 1. Filename pattern match
-	local name_matches = matches_pattern(filepath, opts.patterns)
-
-	-- 2. Content check: first 20 lines for top-level openapi: or swagger:
-	local content_match = false
+	-- 1. Content check: first 20 lines for top-level openapi:/swagger: key
+	local lines
 	if vim.api.nvim_buf_is_loaded(bufnr) then
-		local first_lines = vim.api.nvim_buf_get_lines(bufnr, 0, 20, false)
-		for _, line in ipairs(first_lines) do
-			if line:match("^openapi%s*:") or line:match("^swagger%s*:") then
-				content_match = true
-				break
-			end
-			-- JSON format
-			if line:match('"openapi"%s*:') or line:match('"swagger"%s*:') then
-				content_match = true
-				break
-			end
-		end
+		lines = vim.api.nvim_buf_get_lines(bufnr, 0, 20, false)
 	else
-		local raw = vim.fn.readfile(filepath, "", 20)
-		for _, line in ipairs(raw) do
-			if line:match("^openapi%s*:") or line:match("^swagger%s*:") then
-				content_match = true
-				break
-			end
-			if line:match('"openapi"%s*:') or line:match('"swagger"%s*:') then
-				content_match = true
-				break
-			end
+		lines = vim.fn.readfile(filepath, "", 20)
+	end
+
+	for _, line in ipairs(lines) do
+		if line:match("^openapi%s*:") or line:match("^swagger%s*:")
+			or line:match('"openapi"%s*:') or line:match('"swagger"%s*:') then
+			_detection_cache[bufnr] = true
+			return true
 		end
 	end
 
-	if content_match then
-		_detection_cache[bufnr] = true
-		return true
-	end
-
-	-- 3. Part of a multi-file spec: check for root markers in parent dirs
-	if name_matches then
+	-- 2. Filename pattern + root-marker walk (catches split spec files)
+	if matches_pattern(filepath, opts.patterns) then
 		local dir = vim.fn.fnamemodify(filepath, ":h")
-		local root = find_root(dir, opts.root_markers)
-		if root then
+		if find_root(dir, opts.root_markers) then
 			_detection_cache[bufnr] = true
 			return true
 		end
@@ -129,218 +96,121 @@ local function is_openapi_buffer(bufnr)
 	return false
 end
 
--- Expose for use by other modules
 M.is_openapi_buffer = is_openapi_buffer
-M.find_root = find_root
 
---- Find the spec root directory for the given buffer.
---- Walks parent directories looking for a root_marker file.
---- Falls back to the buffer file's own directory so that specs that aren't
---- named openapi.yaml (e.g. petstore.yaml, api-docs.yaml) still get indexed.
+-- ── Runtime detection ─────────────────────────────────────────────────────────
+
+--- Locate the Lua runtime to use for the server.
+--- Uses `nvim -l` (available in every Neovim install ≥ 0.9) which runs the
+--- given script with Neovim's built-in LuaJIT — no external dependency.
+--- Falls back to luajit or lua on PATH if nvim -l is somehow unavailable.
+--- @return string[], string|nil  {cmd, args...}, or nil + error message
+local function find_runtime_cmd(server_main)
+	-- Primary: nvim --headless -l <script>
+	-- nvim is always on PATH when this plugin is loaded.
+	if vim.fn.executable("nvim") == 1 then
+		return { "nvim", "--headless", "-l", server_main }
+	end
+	-- Fallbacks for unusual setups
+	for _, exe in ipairs({ "luajit", "lua" }) do
+		if vim.fn.executable(exe) == 1 then
+			return { exe, server_main }
+		end
+	end
+	return nil, "openapi-navigator: cannot find a Lua runtime. "
+		.. "Ensure 'nvim', 'luajit', or 'lua' is on PATH."
+end
+
+--- Return the absolute path to the plugin root (the directory that contains
+--- this file's parent: plugin_root/lua/openapi-navigator/init.lua).
+--- @return string
+local function plugin_root()
+	-- debug.getinfo(1, "S").source is "@/abs/path/to/init.lua"
+	local src = debug.getinfo(1, "S").source:sub(2)  -- strip leading '@'
+	-- Go up two levels: init.lua → openapi-navigator/ → lua/ → plugin root
+	return vim.fn.fnamemodify(src, ":h:h:h")
+end
+
+-- ── Setup ─────────────────────────────────────────────────────────────────────
+
+--- Get the spec root directory for a buffer.
+--- Walks parent directories for a root marker, falls back to the file's own dir.
 --- @param bufnr integer
 --- @return string|nil
 function M.get_spec_root(bufnr)
 	local filepath = vim.api.nvim_buf_get_name(bufnr or 0)
-	if filepath == "" then
-		return nil
-	end
+	if filepath == "" then return nil end
 	local dir = vim.fn.fnamemodify(vim.fn.resolve(filepath), ":h")
-	return find_root(dir, config.options.root_markers) or dir
+	local opts = config.options
+	return find_root(dir, opts.root_markers) or dir
 end
 
--- ---------------------------------------------------------------------------
--- Keymap attachment
--- ---------------------------------------------------------------------------
-
---- Attach buffer-local keymaps for OpenAPI navigation.
---- @param bufnr integer
-local function attach_keymaps(bufnr)
-	local km = config.options.keymaps
-	local function map(lhs, rhs, desc)
-		if lhs ~= false then
-			vim.keymap.set("n", lhs, rhs, { buffer = bufnr, desc = desc, silent = true })
-		end
-	end
-
-	map(km.goto_definition, function()
-		require("openapi-navigator.resolver").goto_definition()
-	end, "OpenAPI: go to $ref definition")
-
-	map(km.hover, function()
-		require("openapi-navigator.hover").show()
-	end, "OpenAPI: hover preview of $ref")
-
-	map(km.find_references, function()
-		require("openapi-navigator.references").find()
-	end, "OpenAPI: find all $ref usages")
-end
-
--- Track which buffers already have keymaps so we don't double-attach
-local _keymaps_attached = {}
-
--- ---------------------------------------------------------------------------
--- Setup
--- ---------------------------------------------------------------------------
-
---- Attach keymaps to a buffer and schedule index build if not already done.
---- Safe to call multiple times — guards via _keymaps_attached.
---- @param bufnr integer
-local function attach_if_openapi(bufnr)
-	if _keymaps_attached[bufnr] then
-		return
-	end
-	if not is_openapi_buffer(bufnr) then
-		return
-	end
-	attach_keymaps(bufnr)
-	_keymaps_attached[bufnr] = true
-	vim.schedule(function()
-		if vim.api.nvim_buf_is_valid(bufnr) then
-			require("openapi-navigator.index").ensure_indexed(bufnr)
-		end
-	end)
-end
-
---- Main entry point. Call this from your config:
+--- Main entry point.
 ---   require("openapi-navigator").setup(opts)
 --- @param opts table|nil
 function M.setup(opts)
-	config.build(opts)
+	local cfg = config.build(opts)
+
+	local root = plugin_root()
+	local server_main = root .. "/server/main.lua"
+
+	-- Verify the server script exists
+	if vim.fn.filereadable(server_main) ~= 1 then
+		vim.notify(
+			"openapi-navigator: server not found at " .. server_main
+				.. "\nDid the plugin install correctly?",
+			vim.log.levels.ERROR
+		)
+		return
+	end
 
 	local group = vim.api.nvim_create_augroup("OpenAPINavigator", { clear = true })
 
-	-- Attach keymaps and start lazy indexing when entering an OpenAPI buffer
-	vim.api.nvim_create_autocmd("BufEnter", {
-		group = group,
-		pattern = { "*.yaml", "*.yml", "*.json" },
+	-- Start the LSP server whenever an OpenAPI buffer is opened
+	vim.api.nvim_create_autocmd("FileType", {
+		group   = group,
+		pattern = { "yaml", "json" },
 		callback = function(ev)
-			attach_if_openapi(ev.buf)
-		end,
-	})
+			if not is_openapi_buffer(ev.buf, cfg) then return end
 
-	-- Re-attach after LSP attaches so our keymaps win over yaml-language-server's
-	-- buffer-local gd / K mappings.
-	-- vim.schedule defers to the next event loop tick so we run AFTER all other
-	-- LspAttach handlers (including the user's lspconfig on_attach callbacks).
-	vim.api.nvim_create_autocmd("LspAttach", {
-		group = group,
-		callback = function(ev)
-			local bufnr = ev.buf
-			vim.schedule(function()
-				if not vim.api.nvim_buf_is_valid(bufnr) then
-					return
-				end
-				local name = vim.api.nvim_buf_get_name(bufnr)
-				if (name:match("%.[yY][aA]?[mM][lL]$") or name:match("%.json$")) and is_openapi_buffer(bufnr) then
-					-- Re-set keymaps so they override whatever the LSP just installed.
-					attach_keymaps(bufnr)
-					_keymaps_attached[bufnr] = true
-				end
-			end)
-		end,
-	})
-
-	-- Invalidate index entries and re-detect on save
-	vim.api.nvim_create_autocmd("BufWritePost", {
-		group = group,
-		pattern = { "*.yaml", "*.yml", "*.json" },
-		callback = function(ev)
-			-- Clear detection cache so the file is re-evaluated after edits
-			_detection_cache[ev.buf] = nil
-			if is_openapi_buffer(ev.buf) then
-				require("openapi-navigator.index").invalidate(ev.buf)
+			local cmd, err = find_runtime_cmd(server_main)
+			if not cmd then
+				vim.notify(err, vim.log.levels.ERROR)
+				return
 			end
+
+			local root_dir = M.get_spec_root(ev.buf)
+
+			vim.lsp.start({
+				name = "openapi-navigator",
+				cmd  = cmd,
+				root_dir = root_dir,
+				init_options = {
+					root_markers = cfg.root_markers,
+					hover        = cfg.hover,
+				},
+				-- Only attach to YAML / JSON OpenAPI buffers
+				filetypes = { "yaml", "json" },
+			})
 		end,
 	})
 
-	-- Clean up caches when a buffer is deleted
+	-- Clear detection cache on save so modified files are re-evaluated
+	vim.api.nvim_create_autocmd("BufWritePost", {
+		group   = group,
+		pattern = { "*.yaml", "*.yml", "*.json" },
+		callback = function(ev)
+			_detection_cache[ev.buf] = nil
+		end,
+	})
+
+	-- Clean up cache when a buffer is deleted
 	vim.api.nvim_create_autocmd("BufDelete", {
 		group = group,
 		callback = function(ev)
 			_detection_cache[ev.buf] = nil
-			_keymaps_attached[ev.buf] = nil
 		end,
 	})
-
-	-- User commands
-	vim.api.nvim_create_user_command("OpenAPIReferences", function()
-		require("openapi-navigator.references").find()
-	end, { desc = "Find all $ref usages of the definition under cursor" })
-
-	-- Handle buffers that were already open before setup() was called.
-	-- This is the common case when lazy.nvim loads the plugin on the first
-	-- YAML BufEnter — that event already fired, so the autocmd above won't
-	-- trigger for the current buffer.
-	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-		if vim.api.nvim_buf_is_loaded(bufnr) then
-			local name = vim.api.nvim_buf_get_name(bufnr)
-			if name:match("%.[yY][aA]?[mM][lL]$") or name:match("%.json$") then
-				attach_if_openapi(bufnr)
-			end
-		end
-	end
-
-	vim.api.nvim_create_user_command("OpenAPIDebug", function()
-		local idx = require("openapi-navigator.index")
-		local res = require("openapi-navigator.resolver")
-		local bufnr = vim.api.nvim_get_current_buf()
-		local file = vim.api.nvim_buf_get_name(bufnr)
-		local lines = {}
-
-		local function add(label, value)
-			table.insert(lines, string.format("  %-22s %s", label .. ":", tostring(value)))
-		end
-
-		table.insert(lines, "openapi-navigator debug")
-		table.insert(lines, string.rep("─", 50))
-		add("buffer", vim.fn.fnamemodify(file, ":~:."))
-		add("detected as OpenAPI", tostring(is_openapi_buffer(bufnr)))
-		add("keymaps attached", tostring(_keymaps_attached[bufnr] == true))
-		add("spec root", tostring(M.get_spec_root(bufnr)))
-
-		local n_def, n_ref, n_files = 0, 0, 0
-		for _ in pairs(idx._definitions) do
-			n_def = n_def + 1
-		end
-		for _ in pairs(idx._references) do
-			n_ref = n_ref + 1
-		end
-		for _ in pairs(idx._indexed_files) do
-			n_files = n_files + 1
-		end
-		add("indexed files", n_files)
-		add("definitions", n_def)
-		add("reference keys", n_ref)
-
-		local ref = res.parse_ref_at_cursor()
-		if ref then
-			add("$ref on cursor", ref.raw)
-			local target = res.resolve_file(ref, bufnr)
-			add("resolves to file", tostring(target and vim.fn.fnamemodify(target, ":~:.") or "NOT FOUND"))
-			if target then
-				local pos = res.resolve_pointer(target, ref.pointer)
-				add("pointer line", tostring(pos and pos.line or "NOT FOUND"))
-			end
-			if target then
-				local ckey = idx.canonical_key(vim.fn.resolve(target), ref.pointer)
-				local refs = idx.get_references(ckey)
-				add("canonical key", ckey)
-				add("references found", #refs)
-			end
-		else
-			local pointer = idx.get_pointer_at_cursor(bufnr)
-			add("$ref on cursor", "none")
-			add("pointer at cursor", tostring(pointer))
-			if pointer then
-				local ckey = idx.canonical_key(vim.fn.resolve(file), pointer)
-				local refs = idx.get_references(ckey)
-				add("canonical key", ckey)
-				add("references found", #refs)
-			end
-		end
-
-		vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO, { title = "OpenAPI Navigator" })
-	end, { desc = "Show openapi-navigator diagnostics for the current buffer" })
 end
 
 return M
