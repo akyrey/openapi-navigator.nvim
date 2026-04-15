@@ -269,29 +269,47 @@ Nullable type arrays~
 ==============================================================================
 10. EXTENDING                                   *openapi-navigator-extending*
 
-Framework route linking~
+Laravel route linking~                          *openapi-navigator-laravel*
 
-Route ↔ spec linking for specific frameworks (Laravel, Express, Django, …)
-is planned as a generic adapter system.  Each adapter will implement: >
+The built-in Laravel adapter maps OpenAPI path/operation positions to Laravel
+controller methods.  When the cursor is on a path key (`/users/{id}:`) or an
+HTTP method key (`get:`) inside the `paths:` section and you press `gd`, the
+adapter:
 
-    require("openapi-navigator").register_framework({
-      name        = "laravel",
+  1. Locates the Laravel project root by walking up from the spec file and
+     looking for an `artisan` file.
+  2. Runs `php artisan route:list --json` (or your configured command).
+  3. Matches the spec path and method to a Laravel route (parameter names like
+     `{id}` vs `{user}` are ignored — only the pattern matters).
+  4. Resolves the controller action (e.g. `App\Http\Controllers\UserController@show`)
+     to a file and line via the PSR-4 map in `composer.json`.
+  5. Returns the location so your existing `gd` keymap jumps directly to the
+     method.
 
-      -- Return true when this adapter should activate for a spec root.
-      detect      = function(root) ... end,
+Cursor on a path key (no method) → all matching operations are returned as
+separate Locations; Neovim shows a picker.
 
-      -- Return a list of { method, uri, handler } route entries.
-      list_routes = function(opts) ... end,
+Configure the adapter in `setup()`: >
 
-      -- Find the route matching an OpenAPI path + HTTP method.
-      match_route = function(path, method, routes) ... end,
+    require("openapi-navigator").setup({
+      laravel = {
+        -- Set to false to disable the adapter entirely.
+        enabled = true,
 
-      -- Find the OpenAPI path definition for a controller handler.
-      find_spec   = function(handler, spec_root) ... end,
+        -- Command used to list routes.
+        -- Override for Docker, wrappers, or custom artisan aliases:
+        --   cmd = { "./xenv", "artisan", "route:list", "--json" }
+        cmd = { "php", "artisan", "route:list", "--json" },
+
+        -- Prepended to spec paths before matching Laravel URIs.
+        -- Use "api" when spec paths are "/users/{id}" but Laravel registers
+        -- "api/users/{id}" (common when using Route::prefix("api")).
+        path_prefix = "",
+      },
     })
 <
-Built-in adapters (starting with Laravel) are planned for a future release.
-Until then, the navigation features in sections 4–5 work for all specs.
+The route list is cached per session and refreshed automatically when any
+`routes/*.php` file is saved.
 
 ==============================================================================
 11. LUA API                                     *openapi-navigator-api*

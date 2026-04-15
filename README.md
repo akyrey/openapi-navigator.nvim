@@ -6,8 +6,8 @@ alongside any other LSP client setup.
 
 Uses your existing `gd` / `K` / `gr` mappings without fighting over them.
 Complements **yaml-language-server** (validation, completion) with `$ref`
-navigation that LSP alone doesn't provide. Supports OpenAPI 3.0 and 3.1,
-YAML and JSON, single-file and multi-file specs.
+navigation and **Laravel route navigation** that LSP alone doesn't provide.
+Supports OpenAPI 3.0 and 3.1, YAML and JSON, single-file and multi-file specs.
 
 No external binary dependencies. No Treesitter parsers required.
 
@@ -43,10 +43,11 @@ use {
 
 ### Go to Definition (`gd`)
 
-When the cursor is on a `$ref` value, your existing `gd` mapping jumps to the
-referenced definition. Works via the standard LSP `textDocument/definition`
-request — FzfLua, Telescope, and `vim.lsp.buf.definition` all route through
-the server automatically.
+`gd` has two modes depending on where the cursor is:
+
+**On a `$ref` value** — jumps to the referenced definition. Works via the
+standard LSP `textDocument/definition` request — FzfLua, Telescope, and
+`vim.lsp.buf.definition` all route through the server automatically.
 
 Supports all `$ref` formats:
 
@@ -57,6 +58,25 @@ Supports all `$ref` formats:
 | Cross-file with pointer | `$ref: './schemas/User.yaml#/properties/email'` |
 | Relative from subdirectory | `$ref: '../openapi.yaml#/components/schemas/UserId'` |
 | Path-item `$ref` (OpenAPI 3.1) | `$ref: './paths/users.yaml'` |
+
+**On an HTTP method or path key inside `paths:`** — jumps to the Laravel
+controller method that implements the route (see [Laravel integration](#laravel-route-navigation) below).
+
+```yaml
+paths:
+  /users/{id}:   # ← gd here → picker with all methods for this path
+    get:         # ← gd here → jumps directly to UserController@show
+```
+
+### `$ref` Completion
+
+When typing a `$ref` value, the plugin offers completions via the standard LSP
+completion request (Ctrl+Space in nvim-cmp, or your existing completion keymap):
+
+- **Local pointer completions** — `#/components/schemas/…` entries defined in the current file
+- **File path completions** — relative paths to other spec files in the workspace (e.g. `./schemas/User.yaml`)
+
+Completions are triggered automatically when you type `#` or `/` inside a `$ref` value.
 
 ### Hover Preview (`K`)
 
@@ -134,8 +154,51 @@ require("openapi-navigator").setup({
     max_height = 30,
     max_depth  = 2,  -- max nested $ref expansion levels
   },
+
+  -- Laravel route navigation (see below)
+  laravel = {
+    enabled     = true,
+    cmd         = { "php", "artisan", "route:list", "--json" },
+    path_prefix = "",
+  },
 })
 ```
+
+## Laravel route navigation
+
+When your OpenAPI spec lives alongside a Laravel project, `gd` on a path or
+operation key jumps directly to the controller method that implements it.
+
+### How it works
+
+1. Walks up from the spec file looking for an `artisan` file to locate the Laravel root.
+2. Runs `php artisan route:list --json` (or your configured command) and caches the result.
+3. Matches the spec path and HTTP method to a Laravel route — parameter names (`{id}` vs `{user}`) are ignored; only the pattern matters.
+4. Reads `composer.json` to resolve the controller FQN to a file via PSR-4, then scans for the method declaration.
+5. Returns an LSP `Location` so your `gd` keymap jumps there directly.
+
+### Configuration
+
+```lua
+require("openapi-navigator").setup({
+  laravel = {
+    -- Set to false to disable entirely
+    enabled = true,
+
+    -- Override for Docker, Sail, or custom wrappers:
+    cmd = { "./xenv", "artisan", "route:list", "--json" },
+    -- Or for Laravel Sail:
+    -- cmd = { "./vendor/bin/sail", "artisan", "route:list", "--json" },
+
+    -- Prepend to spec paths before matching Laravel URIs.
+    -- Use "api" when your spec has "/users/{id}" but Laravel registers "api/users/{id}".
+    path_prefix = "api",
+  },
+})
+```
+
+The route list is cached per session and refreshed automatically whenever a
+`routes/*.php` file is saved.
 
 ## Multi-file specs
 
@@ -186,6 +249,8 @@ openapi-navigator.nvim/
     ├── index.lua                  # Bidirectional ref index
     ├── hover.lua                  # Hover response builder
     ├── references.lua             # Find-references response builder
+    ├── completion.lua             # $ref value completion items
+    ├── laravel.lua                # Laravel route navigation adapter
     ├── document_store.lua         # In-memory open file contents
     ├── workspace.lua              # Root detection + file globbing
     └── fs.lua                     # Pure-Lua file ops (no vim.fn)
@@ -193,4 +258,6 @@ openapi-navigator.nvim/
 
 Data flow: **LSP request → dispatcher → resolver extracts `$ref` + walks
 JSON pointer → index provides reverse lookups → Location / Hover / Location[]
-returned to client**.
+returned to client**. When the cursor is not on a `$ref`, the definition
+handler falls through to the Laravel adapter which maps paths/operations to
+controller methods via `artisan route:list`.

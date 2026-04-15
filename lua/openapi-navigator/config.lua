@@ -23,9 +23,21 @@ M.defaults = {
 
 	-- Hover preview options (passed to the LSP server as initializationOptions)
 	hover = {
-		max_width  = 80,
+		max_width = 80,
 		max_height = 30,
-		max_depth  = 2,
+		max_depth = 2,
+	},
+
+	-- Laravel framework adapter (passed to the LSP server as initializationOptions)
+	laravel = {
+		-- Set to false to disable Laravel route navigation entirely
+		enabled = true,
+		-- Command used to list routes. Override for Docker or custom wrappers, e.g.:
+		--   cmd = { "./xenv", "artisan", "route:list", "--json" }
+		cmd = { "php", "artisan", "route:list", "--json" },
+		-- Prefix to prepend to OpenAPI paths before matching Laravel URIs.
+		-- Use "api" when your spec paths are "/users/{id}" but Laravel registers "api/users/{id}".
+		path_prefix = "",
 	},
 }
 

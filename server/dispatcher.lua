@@ -8,6 +8,7 @@ local resolver = require("resolver")
 local hover_mod = require("hover")
 local refs_mod = require("references")
 local comp_mod = require("completion")
+local laravel_mod = require("laravel")
 local fs = require("fs")
 local log = require("log")
 
@@ -32,6 +33,11 @@ local _config = {
 		max_width = 80,
 		max_height = 30,
 		max_depth = 2,
+	},
+	laravel = {
+		enabled = true,
+		cmd = { "php", "artisan", "route:list", "--json" },
+		path_prefix = "",
 	},
 }
 
@@ -79,6 +85,11 @@ handlers["initialize"] = function(id, params)
 		if opts.hover then
 			for k, v in pairs(opts.hover) do
 				_config.hover[k] = v
+			end
+		end
+		if opts.laravel then
+			for k, v in pairs(opts.laravel) do
+				_config.laravel[k] = v
 			end
 		end
 	end
@@ -179,6 +190,14 @@ handlers["textDocument/definition"] = function(id, params)
 
 	local ref = resolver.parse_ref_at(uri, position)
 	if not ref then
+		-- No $ref at cursor — try Laravel route navigation
+		if _config.laravel.enabled then
+			local locs = laravel_mod.find_definition(uri, position, _config.laravel)
+			if locs then
+				-- Single location → scalar; multiple → array (Neovim shows picker)
+				return make_response(id, #locs == 1 and locs[1] or locs)
+			end
+		end
 		return make_response(id, nil)
 	end
 
@@ -250,6 +269,10 @@ handlers["workspace/didChangeWatchedFiles"] = function(_id, params)
 	for _, change in ipairs(params.changes or {}) do
 		local path = fs.resolve(fs.uri_to_path(change.uri))
 		index.invalidate(path)
+		-- Invalidate Laravel routes cache when a routes/*.php file changes
+		if path:match("/routes/[^/]+%.php$") then
+			laravel_mod.invalidate_routes(path)
+		end
 		log.debug("watched file changed: %s", path)
 	end
 	return nil

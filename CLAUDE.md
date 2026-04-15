@@ -146,8 +146,35 @@ nvim --headless --noplugin \
 
 CI runs on Neovim v0.9.5, v0.10.3, and nightly (see `.github/workflows/ci.yml`).
 
-## Framework adapter system (deferred)
+## Framework adapter system — Laravel
 
-Route ↔ spec linking (Laravel, Express, Django, …) is intentionally deferred.
-When implemented it will live as a server-side module exposing a generic adapter
-interface, callable via a custom LSP request method.
+`server/laravel.lua` implements the first built-in route adapter. When the cursor
+is on a `paths/<path>` or `paths/<path>/<method>` key and `gd` is pressed, the
+adapter runs `php artisan route:list --json` (configurable via `laravel.cmd`),
+matches the OpenAPI path to a Laravel route, resolves the controller action to a
+file and line, and returns an LSP `Location` so the editor jumps to the method.
+
+Key public functions in `server/laravel.lua`:
+- `get_root(source_uri)` — walks up from spec dir looking for `artisan`; cached.
+- `list_routes(root, cmd)` — runs the route-list command, parses JSON, caches by
+  `mtime` of `<root>/routes/`.
+- `match_route(spec_path, method, routes, prefix)` — normalises URIs (strip `/`,
+  lowercase, replace `{name}` → `{}`), filters by method. Returns a list.
+- `resolve_action(root, action_fqn)` — reads `composer.json` PSR-4 map, maps
+  `App\Http\Controllers\UserController@show` → file + line.
+- `find_definition(uri, position, config)` — orchestrates the above; called by the
+  dispatcher when `resolver.parse_ref_at` returns nil.
+- `invalidate_routes(filepath)` — clears the routes cache (called on
+  `workspace/didChangeWatchedFiles` for `routes/*.php` files).
+
+Config (forwarded via `initializationOptions.laravel`):
+```lua
+laravel = {
+    enabled     = true,
+    cmd         = { "php", "artisan", "route:list", "--json" },
+    path_prefix = "",   -- e.g. "api" when spec paths omit the API prefix
+}
+```
+
+Future adapters (Express, Django, …) can follow the same pattern as a new
+`server/<framework>.lua` module wired into the dispatcher's definition fallback.

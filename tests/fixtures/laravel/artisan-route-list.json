@@ -1,0 +1,58 @@
+[
+  {
+    "domain": null,
+    "method": "GET|HEAD",
+    "uri": "api/users",
+    "name": "users.index",
+    "action": "App\\Http\\Controllers\\UserController@index",
+    "middleware": "api\nauth:sanctum"
+  },
+  {
+    "domain": null,
+    "method": "POST",
+    "uri": "api/users",
+    "name": "users.store",
+    "action": "App\\Http\\Controllers\\UserController@store",
+    "middleware": "api\nauth:sanctum"
+  },
+  {
+    "domain": null,
+    "method": "GET|HEAD",
+    "uri": "api/users/{id}",
+    "name": "users.show",
+    "action": "App\\Http\\Controllers\\UserController@show",
+    "middleware": "api\nauth:sanctum"
+  },
+  {
+    "domain": null,
+    "method": "PUT|PATCH",
+    "uri": "api/users/{user}",
+    "name": "users.update",
+    "action": "App\\Http\\Controllers\\UserController@update",
+    "middleware": "api\nauth:sanctum"
+  },
+  {
+    "domain": null,
+    "method": "DELETE",
+    "uri": "api/users/{user}",
+    "name": "users.destroy",
+    "action": "App\\Http\\Controllers\\UserController@destroy",
+    "middleware": "api\nauth:sanctum"
+  },
+  {
+    "domain": null,
+    "method": "GET|HEAD",
+    "uri": "api/health",
+    "name": "health",
+    "action": "Closure",
+    "middleware": "api"
+  },
+  {
+    "domain": null,
+    "methods": ["GET", "HEAD"],
+    "uri": "api/v2/users/{userId}/addresses/{addressId}",
+    "name": "v2.users.addresses.show",
+    "action": "App\\Http\\Controllers\\V2\\AddressController@show",
+    "middleware": ["api", "auth:sanctum"]
+  }
+]

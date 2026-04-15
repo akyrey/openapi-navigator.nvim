@@ -40,7 +40,9 @@ local function find_root(dir, markers)
 			end
 		end
 		local parent = vim.fn.fnamemodify(current, ":h")
-		if parent == current then break end
+		if parent == current then
+			break
+		end
 		current = parent
 	end
 	return nil
@@ -76,8 +78,12 @@ local function is_openapi_buffer(bufnr, opts)
 	end
 
 	for _, line in ipairs(lines) do
-		if line:match("^openapi%s*:") or line:match("^swagger%s*:")
-			or line:match('"openapi"%s*:') or line:match('"swagger"%s*:') then
+		if
+			line:match("^openapi%s*:")
+			or line:match("^swagger%s*:")
+			or line:match('"openapi"%s*:')
+			or line:match('"swagger"%s*:')
+		then
 			_detection_cache[bufnr] = true
 			return true
 		end
@@ -117,8 +123,7 @@ local function find_runtime_cmd(server_main)
 			return { exe, server_main }
 		end
 	end
-	return nil, "openapi-navigator: cannot find a Lua runtime. "
-		.. "Ensure 'nvim', 'luajit', or 'lua' is on PATH."
+	return nil, "openapi-navigator: cannot find a Lua runtime. " .. "Ensure 'nvim', 'luajit', or 'lua' is on PATH."
 end
 
 --- Return the absolute path to the plugin root (the directory that contains
@@ -126,7 +131,7 @@ end
 --- @return string
 local function plugin_root()
 	-- debug.getinfo(1, "S").source is "@/abs/path/to/init.lua"
-	local src = debug.getinfo(1, "S").source:sub(2)  -- strip leading '@'
+	local src = debug.getinfo(1, "S").source:sub(2) -- strip leading '@'
 	-- Go up two levels: init.lua → openapi-navigator/ → lua/ → plugin root
 	return vim.fn.fnamemodify(src, ":h:h:h")
 end
@@ -139,7 +144,9 @@ end
 --- @return string|nil
 function M.get_spec_root(bufnr)
 	local filepath = vim.api.nvim_buf_get_name(bufnr or 0)
-	if filepath == "" then return nil end
+	if filepath == "" then
+		return nil
+	end
 	local dir = vim.fn.fnamemodify(vim.fn.resolve(filepath), ":h")
 	local opts = config.options
 	return find_root(dir, opts.root_markers) or dir
@@ -157,8 +164,7 @@ function M.setup(opts)
 	-- Verify the server script exists
 	if vim.fn.filereadable(server_main) ~= 1 then
 		vim.notify(
-			"openapi-navigator: server not found at " .. server_main
-				.. "\nDid the plugin install correctly?",
+			"openapi-navigator: server not found at " .. server_main .. "\nDid the plugin install correctly?",
 			vim.log.levels.ERROR
 		)
 		return
@@ -168,10 +174,12 @@ function M.setup(opts)
 
 	-- Start the LSP server whenever an OpenAPI buffer is opened
 	vim.api.nvim_create_autocmd("FileType", {
-		group   = group,
+		group = group,
 		pattern = { "yaml", "json" },
 		callback = function(ev)
-			if not is_openapi_buffer(ev.buf, cfg) then return end
+			if not is_openapi_buffer(ev.buf, cfg) then
+				return
+			end
 
 			local cmd, err = find_runtime_cmd(server_main)
 			if not cmd then
@@ -183,11 +191,12 @@ function M.setup(opts)
 
 			vim.lsp.start({
 				name = "openapi-navigator",
-				cmd  = cmd,
+				cmd = cmd,
 				root_dir = root_dir,
 				init_options = {
 					root_markers = cfg.root_markers,
-					hover        = cfg.hover,
+					hover = cfg.hover,
+					laravel = cfg.laravel,
 				},
 				-- Only attach to YAML / JSON OpenAPI buffers
 				filetypes = { "yaml", "json" },
@@ -197,7 +206,7 @@ function M.setup(opts)
 
 	-- Clear detection cache on save so modified files are re-evaluated
 	vim.api.nvim_create_autocmd("BufWritePost", {
-		group   = group,
+		group = group,
 		pattern = { "*.yaml", "*.yml", "*.json" },
 		callback = function(ev)
 			_detection_cache[ev.buf] = nil
