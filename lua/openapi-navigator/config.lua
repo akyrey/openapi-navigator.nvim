@@ -28,6 +28,16 @@ M.defaults = {
 		max_depth = 2,
 	},
 
+	-- Browser preview options
+	preview = {
+		-- TCP port for the local HTTP server. 0 = let the OS pick a free port.
+		port = 0,
+		-- RapiDoc color theme: "dark" or "light"
+		theme = "dark",
+		-- Automatically open the browser when :OpenAPIPreview is run
+		open_browser = true,
+	},
+
 	-- Laravel framework adapter (passed to the LSP server as initializationOptions)
 	laravel = {
 		-- Set to false to disable Laravel route navigation entirely

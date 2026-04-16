@@ -15,6 +15,7 @@ No external binary dependencies. No Treesitter parsers required.
 
 - Neovim >= 0.9
 - yaml-language-server (optional, recommended for validation/completion)
+- Internet access on first browser preview load (RapiDoc loads from unpkg CDN; cached by the browser after that)
 
 ## Installation
 
@@ -40,6 +41,24 @@ use {
 ```
 
 ## Features
+
+### Live Browser Preview
+
+`:OpenAPIPreview` opens the current spec in a browser tab rendered by
+[RapiDoc](https://rapidocweb.com/). The browser auto-refreshes whenever you
+save any file in the spec workspace — no manual reload needed.
+
+```
+:OpenAPIPreview      " start preview (opens browser automatically)
+:OpenAPIPreviewStop  " stop the preview server
+```
+
+The preview server:
+- Binds to `127.0.0.1` on a random free port (configurable).
+- Serves the main spec at `/spec` and all other spec files as static assets,
+  so cross-file `$ref` values resolve correctly in the browser.
+- Pushes reload events via Server-Sent Events on `BufWritePost`.
+- Shuts down cleanly when Neovim exits.
 
 ### Go to Definition (`gd`)
 
@@ -155,6 +174,13 @@ require("openapi-navigator").setup({
     max_depth  = 2,  -- max nested $ref expansion levels
   },
 
+  -- Browser preview options
+  preview = {
+    port         = 0,      -- 0 = OS-assigned free port; set a fixed port if preferred
+    theme        = "dark", -- "dark" | "light"
+    open_browser = true,   -- auto-open the browser on :OpenAPIPreview
+  },
+
   -- Laravel route navigation (see below)
   laravel = {
     enabled     = true,
@@ -240,7 +266,12 @@ openapi-navigator.nvim/
 │   └── openapi-navigator.vim      # Double-load guard
 ├── lua/openapi-navigator/
 │   ├── init.lua                   # OpenAPI detection + vim.lsp.start()
-│   └── config.lua                 # User options with defaults
+│   ├── config.lua                 # User options with defaults
+│   └── preview/
+│       ├── init.lua               # Preview orchestrator (commands, autocmds)
+│       ├── http.lua               # vim.loop TCP HTTP server
+│       ├── sse.lua                # Server-Sent Events subscriber manager
+│       └── html.lua               # RapiDoc HTML page template
 └── server/                        # Standalone LSP server (no vim.* deps)
     ├── main.lua                   # Entry point: stdio → dispatcher loop
     ├── rpc.lua                    # JSON-RPC 2.0 framing

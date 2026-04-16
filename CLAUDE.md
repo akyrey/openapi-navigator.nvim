@@ -18,8 +18,13 @@ LuaJIT — no separate runtime needed).
 
 ```
 lua/openapi-navigator/
-  init.lua        Thin Neovim client: OpenAPI detection, vim.lsp.start()
+  init.lua        Thin Neovim client: OpenAPI detection, vim.lsp.start(), :OpenAPIPreview commands
   config.lua      Defaults + setup() merge (no keymaps — those come from user LSP config)
+  preview/
+    init.lua      Preview orchestrator: server lifecycle, browser open, BufWritePost hook
+    http.lua      vim.loop TCP HTTP server (routes /, /events, /spec, /*)
+    sse.lua       SSE subscriber manager: add_client, broadcast, heartbeat timers
+    html.lua      RapiDoc HTML page template (pure function, no deps)
 plugin/
   openapi-navigator.vim  Double-load guard
 server/                  Standalone LSP server (no vim.* dependencies)
@@ -45,6 +50,8 @@ tests/
     hover_spec.lua       Target-file resolution + block extraction tests
     references_spec.lua  Canonical key building + reference lookup tests
     config_spec.lua      Config defaults and merging tests
+    preview_html_spec.lua  html.render output structure tests
+    preview_sse_spec.lua   SSE subscriber list tests (mock TCP handles)
   fixtures/
     openapi30.yaml       Main 3.0 spec (same-file and cross-file $refs)
     openapi31.yaml       OpenAPI 3.1 spec (webhooks, nullable arrays, prefixItems)
@@ -112,6 +119,39 @@ Config comes from `initializationOptions.root_markers` and
 `vim.lsp.start()` for OpenAPI buffers. No keymaps are attached — the user's
 existing `gd` / `K` / `gr` LSP mappings route through the server automatically.
 
+Also registers `:OpenAPIPreview` and `:OpenAPIPreviewStop` user commands, and
+notifies the preview server (`preview.notify_change()`) in the `BufWritePost`
+autocmd when the preview is running.
+
+### lua/openapi-navigator/preview/ — Browser preview
+
+Four modules that together implement the live preview feature. All use `vim.*`
+APIs and must NOT be required from the `server/` side.
+
+- **preview/html.lua** — `M.render(opts)` returns the complete HTML string with
+  a `<rapi-doc>` element (loaded from unpkg CDN) and an `EventSource('/events')`
+  script that updates `spec-url` on each `reload` event. Pure function, zero deps.
+
+- **preview/sse.lua** — SSE subscriber list. `add_client(handle)` registers a
+  TCP connection and starts a 30-second heartbeat timer. `broadcast(event_data)`
+  writes `data: <event>\n\n` to all subscribers and removes dead ones.
+  `close_all()` sends a `shutdown` event and closes every connection.
+
+- **preview/http.lua** — `vim.loop.new_tcp()` server. Binds to `127.0.0.1:<port>`
+  (port 0 = OS-assigned). Parses the HTTP request line from a per-connection
+  accumulation buffer (waits for `\r\n\r\n`). Routes:
+  - `GET /` → HTML page
+  - `GET /events` → SSE (keeps connection open, hands to sse.lua)
+  - `GET /spec` → reads main spec file from disk
+  - `GET /*` → static file from spec root with path traversal guard
+    (`vim.loop.fs_realpath` + `vim.startswith` against canonical root)
+
+- **preview/init.lua** — orchestrator. `start(bufnr)` resolves the spec root
+  via `require("openapi-navigator").get_spec_root()`, finds the first existing
+  root_marker file as the main spec, starts the HTTP server, and opens the
+  browser (`vim.ui.open` → `open`/`xdg-open` fallbacks). `stop()` tears
+  everything down. `VimLeavePre` autocmd ensures clean shutdown on exit.
+
 ## Design decisions
 
 - **No YAML parser** — `$ref` extraction and JSON pointer resolution use Lua
@@ -134,6 +174,17 @@ existing `gd` / `K` / `gr` LSP mappings route through the server automatically.
 - **Synchronous indexing** — `fs.read_lines()` is fast enough for typical specs
   (<50 files). Async upgrade path: wrap `index_file()` calls without changing
   the public API.
+- **Preview HTTP server lives in `lua/`, not `server/`** — it needs `vim.loop`
+  and `vim.notify`, which are unavailable in the headless server process. The
+  preview modules are only ever loaded inside the interactive Neovim session.
+- **SSE over WebSocket for live reload** — SSE is a plain HTTP keep-alive
+  response; no upgrade handshake required. Sufficient for one-way
+  server→browser notifications and ~60 lines of Lua to implement.
+- **RapiDoc loaded from CDN** — avoids bundling ~500 KB of JS in the repo.
+  The browser caches it after the first load. Requires internet on first use.
+- **Static file serving for multi-file `$ref` resolution** — RapiDoc resolves
+  `$ref`s relative to `spec-url`. Serving the entire spec root as static files
+  means cross-file refs work without any bundling or dereferencing step.
 
 ## Running tests
 

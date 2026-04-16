@@ -172,6 +172,15 @@ function M.setup(opts)
 
 	local group = vim.api.nvim_create_augroup("OpenAPINavigator", { clear = true })
 
+	-- ── Preview commands ────────────────────────────────────────────────────────
+	vim.api.nvim_create_user_command("OpenAPIPreview", function()
+		require("openapi-navigator.preview").start()
+	end, { desc = "Start live OpenAPI preview in browser" })
+
+	vim.api.nvim_create_user_command("OpenAPIPreviewStop", function()
+		require("openapi-navigator.preview").stop()
+	end, { desc = "Stop live OpenAPI preview" })
+
 	-- Start the LSP server whenever an OpenAPI buffer is opened
 	vim.api.nvim_create_autocmd("FileType", {
 		group = group,
@@ -204,12 +213,17 @@ function M.setup(opts)
 		end,
 	})
 
-	-- Clear detection cache on save so modified files are re-evaluated
+	-- Clear detection cache on save so modified files are re-evaluated.
+	-- Also notify the preview server so the browser reloads.
 	vim.api.nvim_create_autocmd("BufWritePost", {
 		group = group,
 		pattern = { "*.yaml", "*.yml", "*.json" },
 		callback = function(ev)
 			_detection_cache[ev.buf] = nil
+			local preview = require("openapi-navigator.preview")
+			if preview.is_running() then
+				preview.notify_change()
+			end
 		end,
 	})
 
